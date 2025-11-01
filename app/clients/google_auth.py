@@ -12,6 +12,8 @@ import json
 from hashlib import sha256
 from typing import Any, Dict, Tuple
 
+import httpx
+
 from fastapi import HTTPException, status
 
 from app.core.config import GoogleSettings, OAuthSettings
@@ -38,6 +40,14 @@ class OAuthStateEncoder:
                 detail="Invalid OAuth state signature.",
             )
         return json.loads(serialized)
+
+
+class OAuthTokenExchangeError(Exception):
+    """Raised when the token endpoint returns an error."""
+
+
+class OAuthTokenNotFoundError(Exception):
+    """Raised when no persisted OAuth token is available for a user."""
 
 
 class GoogleOAuthClient:
@@ -73,12 +83,58 @@ class GoogleOAuthClient:
 
         Returns a tuple of (access_token, refresh_token, expires_in_seconds).
         """
-        # Placeholder implementation; real implementation would use httpx.AsyncClient.
-        raise NotImplementedError("Token exchange requires Google OAuth integration.")
+        payload = {
+            "code": code,
+            "client_id": self._google.client_id,
+            "client_secret": self._google.client_secret,
+            "redirect_uri": str(self._google.redirect_uri),
+            "grant_type": "authorization_code",
+        }
+
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            response = await client.post(self.TOKEN_URL, data=payload)
+
+        if response.status_code != status.HTTP_200_OK:
+            raise OAuthTokenExchangeError(response.text)
+
+        token_payload = response.json()
+        access_token = token_payload.get("access_token")
+        refresh_token = token_payload.get("refresh_token")
+        expires_in = token_payload.get("expires_in")
+
+        if not access_token or not refresh_token or not expires_in:
+            raise OAuthTokenExchangeError("Incomplete token payload returned from Google.")
+
+        return access_token, refresh_token, int(expires_in)
 
     async def refresh_token(self, refresh_token: str) -> Tuple[str, int]:
         """Refresh the access token using a stored refresh token."""
-        raise NotImplementedError("Token refresh requires Google OAuth integration.")
+        payload = {
+            "client_id": self._google.client_id,
+            "client_secret": self._google.client_secret,
+            "refresh_token": refresh_token,
+            "grant_type": "refresh_token",
+        }
+
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            response = await client.post(self.TOKEN_URL, data=payload)
+
+        if response.status_code != status.HTTP_200_OK:
+            raise OAuthTokenExchangeError(response.text)
+
+        token_payload = response.json()
+        access_token = token_payload.get("access_token")
+        expires_in = token_payload.get("expires_in")
+
+        if not access_token or not expires_in:
+            raise OAuthTokenExchangeError("Incomplete refresh payload returned from Google.")
+
+        return access_token, int(expires_in)
 
 
-__all__ = ["GoogleOAuthClient", "OAuthStateEncoder"]
+__all__ = [
+    "GoogleOAuthClient",
+    "OAuthStateEncoder",
+    "OAuthTokenExchangeError",
+    "OAuthTokenNotFoundError",
+]

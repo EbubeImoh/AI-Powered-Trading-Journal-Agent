@@ -24,18 +24,23 @@ class AnalysisQueueService:
         payload = self._build_message_payload(job_id=job_id, request=request)
 
         # Persist pending status in DynamoDB.
-        self._ddb.put_item(
-            {
-                "pk": f"user#{request.user_id}",
-                "sk": f"analysis#{job_id}",
-                "status": "pending",
-                "requested_at": datetime.utcnow().isoformat(),
-                "prompt": request.prompt,
-                "sheet_id": request.sheet_id,
-                "start_date": request.start_date.isoformat() if request.start_date else None,
-                "end_date": request.end_date.isoformat() if request.end_date else None,
-            }
-        )
+        now_iso = datetime.now(tz=timezone.utc).isoformat()
+        item: Dict[str, Any] = {
+            "pk": f"user#{request.user_id}",
+            "sk": f"analysis#{job_id}",
+            "status": "pending",
+            "requested_at": now_iso,
+            "prompt": request.prompt,
+            "sheet_id": request.sheet_id,
+        }
+        if request.sheet_range:
+            item["sheet_range"] = request.sheet_range
+        if request.start_date:
+            item["start_date"] = request.start_date.isoformat()
+        if request.end_date:
+            item["end_date"] = request.end_date.isoformat()
+
+        self._ddb.put_item(item)
 
         self._sqs.enqueue_analysis_request(payload)
         return job_id
@@ -54,9 +59,10 @@ class AnalysisQueueService:
             "user_id": request.user_id,
             "prompt": request.prompt,
             "sheet_id": request.sheet_id,
+            "sheet_range": request.sheet_range,
             "start_date": request.start_date.isoformat() if request.start_date else None,
             "end_date": request.end_date.isoformat() if request.end_date else None,
-            "requested_at": datetime.utcnow().isoformat(),
+            "requested_at": datetime.now(tz=timezone.utc).isoformat(),
         }
 
 

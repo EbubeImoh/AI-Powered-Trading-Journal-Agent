@@ -5,15 +5,26 @@ Business logic for ingesting trades via the FastAPI agent.
 from __future__ import annotations
 
 import base64
+import binascii
 from datetime import timezone
 from typing import List
 
+from fastapi import HTTPException, status
+
 from app.clients import GoogleDriveClient, GoogleSheetsClient
-from app.schemas import TradeFileLink, TradeIngestionRequest, TradeIngestionResponse
+from app.schemas import (
+    TradeAttachment,
+    TradeFileLink,
+    TradeIngestionRequest,
+    TradeIngestionResponse,
+)
 
 
 class TradeIngestionService:
     """Coordinate file uploads and sheet updates for trade entries."""
+
+    _ALLOWED_MIME_PREFIXES = ("image/", "audio/", "video/")
+    _MAX_ATTACHMENT_BYTES = 15 * 1024 * 1024  # 15 MB
 
     def __init__(
         self,
@@ -28,55 +39,85 @@ class TradeIngestionService:
         *,
         request: TradeIngestionRequest,
         sheet_id: str,
+        sheet_range: str | None = None,
+        attachments: List[TradeAttachment] | None = None,
     ) -> TradeIngestionResponse:
         """Persist trade entry and return summary metadata."""
         uploaded_files: List[TradeFileLink] = []
 
+        combined_attachments: List[TradeAttachment] = list(attachments or [])
+
         if request.image_file_b64:
-            uploaded_files.append(
-                await self._upload_file(
-                    user_id=request.user_id,
-                    file_name=f"{request.ticker}_setup.png",
-                    file_b64=request.image_file_b64,
+            combined_attachments.append(
+                TradeAttachment(
+                    filename=f"{request.ticker}_setup.png",
                     mime_type="image/png",
+                    file_b64=request.image_file_b64,
                     tags=["setup", "image"],
                 )
             )
 
         if request.audio_file_b64:
-            uploaded_files.append(
-                await self._upload_file(
-                    user_id=request.user_id,
-                    file_name=f"{request.ticker}_note.m4a",
-                    file_b64=request.audio_file_b64,
+            combined_attachments.append(
+                TradeAttachment(
+                    filename=f"{request.ticker}_note.m4a",
                     mime_type="audio/mp4",
+                    file_b64=request.audio_file_b64,
                     tags=["note", "audio"],
                 )
             )
 
+        for attachment in combined_attachments:
+            uploaded_files.append(
+                await self._upload_attachment(
+                    user_id=request.user_id,
+                    attachment=attachment,
+                )
+            )
+
         sheet_row = self._build_sheet_row(request=request, uploaded_files=uploaded_files)
-        row_id = await self._sheets.append_trade_row(sheet_id=sheet_id, row=sheet_row)
+        row_id = await self._sheets.append_trade_row(
+            user_id=request.user_id,
+            sheet_id=sheet_id,
+            row=sheet_row,
+            sheet_range=sheet_range,
+        )
 
         return TradeIngestionResponse(sheet_row_id=row_id, uploaded_files=uploaded_files)
 
-    async def _upload_file(
+    async def _upload_attachment(
         self,
         *,
         user_id: str,
-        file_name: str,
-        file_b64: str,
-        mime_type: str,
-        tags: list[str],
+        attachment: TradeAttachment,
     ) -> TradeFileLink:
-        """Upload a base64 file to Drive and return metadata."""
-        # Proactively validate payload is proper base64 before network call.
-        base64.b64decode(file_b64)
+        """Upload a trade attachment to Drive and return metadata."""
+        try:
+            payload = base64.b64decode(attachment.file_b64, validate=True)
+        except (ValueError, binascii.Error):  # pragma: no cover - defensive
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Attachment {attachment.filename} is not valid base64.",
+            )
+
+        if len(payload) > self._MAX_ATTACHMENT_BYTES:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Attachment {attachment.filename} exceeds {self._MAX_ATTACHMENT_BYTES // (1024 * 1024)}MB limit.",
+            )
+
+        if not attachment.mime_type.startswith(self._ALLOWED_MIME_PREFIXES):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Attachment {attachment.filename} has unsupported MIME type {attachment.mime_type}.",
+            )
+
         metadata = await self._drive.upload_base64_file(
             user_id=user_id,
-            file_name=file_name,
-            file_b64=file_b64,
-            mime_type=mime_type,
-            tags=tags,
+            file_name=attachment.filename,
+            file_b64=attachment.file_b64,
+            mime_type=attachment.mime_type,
+            tags=attachment.tags,
         )
         return TradeFileLink(**metadata)
 
@@ -89,7 +130,9 @@ class TradeIngestionService:
         """Convert trade request into a row object for Google Sheets."""
         entry_ts = request.entry_timestamp.astimezone(timezone.utc).isoformat()
         exit_ts = request.exit_timestamp.astimezone(timezone.utc).isoformat()
-        file_links = ", ".join(link.shareable_link for link in uploaded_files)
+        file_links = "; ".join(
+            f"{link.drive_file_id}|{link.mime_type}|{link.shareable_link}" for link in uploaded_files
+        )
 
         return [
             request.user_id,

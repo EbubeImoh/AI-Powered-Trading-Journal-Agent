@@ -1,12 +1,12 @@
 # AI-Powered Trading Journal Agent
 
-<<<<<<< HEAD
 Intelligent backend services that capture multi-modal trading data, orchestrate asynchronous analyses, and surface actionable coaching insights to traders.
 
 ## Architecture Overview
 
-- **Main Agent (FastAPI)** – Handles Google OAuth, receives trade submissions, uploads media to Google Drive, and appends rows to the user's Google Sheet. Exposes REST endpoints under `/api`.
-- **Analysis Sub-Agent (AWS Lambda)** – Triggered via SQS to perform long-running analysis with LangGraph. Pulls journal entries, transcribes audio, analyzes images, and synthesizes reports (Gemini integration planned).
+- **Main Agent (FastAPI)** – Handles Google OAuth, receives raw multi-modal trade submissions, uses Gemini to extract structured fields, uploads media to Google Drive, and appends rows to the user's Google Sheet. Exposes REST endpoints under `/api`.
+- **Analysis Sub-Agent (AWS Lambda)** – Triggered via SQS to perform long-running analysis with LangGraph. Pulls journal entries, downloads linked Drive assets, transcribes audio notes, analyzes chart images, optionally performs web research, and synthesizes reports (persisting insights back to DynamoDB).
+  - Now leverages Google Gemini to generate multi-source coaching reports once journal data is retrieved.
 - **Data & Messaging**
   - **Google Sheets / Drive** – User-owned storage for structured and unstructured trade artifacts.
   - **Amazon SQS** – Decouples synchronous ingestion from asynchronous analysis.
@@ -44,11 +44,15 @@ Set the following (e.g., via `.env`) to mirror the production configuration.
 | `APP_LOG_LEVEL` | Logging level (default `INFO`). |
 | `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` / `GOOGLE_REDIRECT_URI` | OAuth 2.0 credentials. |
 | `GOOGLE_DRIVE_ROOT_FOLDER_ID` | Optional Drive folder containing uploads. |
+| `OAUTH_STATE_TTL` | Window (seconds) for OAuth state tokens to remain valid. |
+| `OAUTH_SCOPES` | (Optional) Comma-separated overrides for Google OAuth scopes. |
+| `TOKEN_ENCRYPTION_SECRET` | (Optional) 32+ char secret used to encrypt stored Google tokens (defaults to Google client secret). |
 | `ANALYSIS_QUEUE_URL` | SQS queue endpoint (required for `/analysis/jobs`). |
 | `DYNAMODB_TABLE_NAME` | DynamoDB table for tokens/reports. |
 | `AWS_REGION` | AWS region for AWS clients. |
 | `GEMINI_API_KEY` | Gemini access token. |
 | `GEMINI_MODEL_NAME` / `GEMINI_VISION_MODEL_NAME` | Gemini model identifiers. |
+| `SERPAPI_API_KEY` | (Optional) Enables web research enrichment via SerpAPI. |
 
 3. **Run the API**
 
@@ -56,23 +60,64 @@ Set the following (e.g., via `.env`) to mirror the production configuration.
 uvicorn app.main:app --reload --port 8000
 ```
 
-4. **Key API routes**
+4. **Run quality checks**
+
+```bash
+make lint
+make test
+```
+
+5. **Key API routes**
 
 | Method | Path | Description |
 | --- | --- | --- |
 | `GET` | `/api/health` | Basic health check. |
-| `GET` | `/api/auth/google/authorize` | Returns OAuth authorization URL + state token. |
-| `POST` | `/api/trades?sheet_id=...` | Logs a trade with optional images/audio. |
-| `POST` | `/api/analysis/jobs` | Enqueues an analysis job (sheet & prompt required). |
+| `GET` | `/api/auth/google/authorize?user_id=...` | Returns Google OAuth authorization URL + state token bound to the user. |
+| `POST` | `/api/auth/google/callback` | Exchanges the authorization code for tokens and stores them in DynamoDB. |
+| `POST` | `/api/trades?sheet_id=...&sheet_range=Journal!A1` | Logs a trade with optional images/audio; appends to the specified sheet range. |
+| `POST` | `/api/trades/submit?sheet_id=...` | Accepts raw text + attachments, uses Gemini to derive structured fields, then persists to Drive/Sheets. |
+| `POST` | `/api/analysis/jobs` | Enqueues an analysis job (sheet id & prompt required; optional date range). |
 | `GET` | `/api/analysis/jobs/{job_id}` | Retrieves job status/report from DynamoDB. |
 
-> **Note:** Google OAuth, Drive, Sheets, and Gemini integrations are stubbed with `NotImplementedError`. Replace these stubs with concrete API clients before production use.
+> **Note:** Web research enrichment is optional and requires `SERPAPI_API_KEY`. When omitted, the analysis falls back to journal-derived insights only.
+> Trade attachments are stored in the sheet as `drive_file_id|mime_type|shareable_link`, enabling the analysis worker to resolve metadata and retrieve binary content from Google Drive.
+
+### Analysis Report Schema
+
+Gemini responds with a deterministic JSON structure that downstream consumers can rely on. Each completed job stores the following payload in DynamoDB under the `report` attribute:
+
+```json
+{
+  "performance_overview": {
+    "summary": "...",
+    "key_metrics": ["...", "..."]
+  },
+  "behavioural_patterns": ["..."],
+  "opportunities": ["..."],
+  "action_plan": [
+    {
+      "title": "...",
+      "detail": "..."
+    }
+  ]
+}
+```
+
+Related insights (`audio_insights`, `image_insights`, `external_research`) are persisted alongside the report for contextual drill-down. A Markdown rendering (`report_markdown`) is also stored to support quick display in dashboards.
 
 ## Analysis Lambda
 
 - Entry point: `agents/analysis_lambda/handler.py`
-- Bootstraps a LangGraph workflow that (eventually) loads journal data, performs multimodal analysis, and stores results back in DynamoDB.
-- Current implementation produces a placeholder textual summary until Gemini and Google APIs are wired up.
+- Bootstraps a LangGraph workflow that retrieves journal entries through the Google Sheets integration and stores results back in DynamoDB.
+- Gemini now powers the text reasoning step, combining journal rows, voice-note sentiment, and chart insights into a Markdown coaching report.
+- OAuth refresh/access tokens are encrypted before persisting to DynamoDB using a Fernet key derived from `TOKEN_ENCRYPTION_SECRET` (or the Google client secret when omitted).
+
+### Google OAuth Flow
+
+1. Call `GET /api/auth/google/authorize?user_id={userId}` to receive an `authorization_url` and signed `state` payload.
+2. Redirect the trader to the Google consent screen; Google redirects back to your `GOOGLE_REDIRECT_URI` with `code` and the original `state`.
+3. POST `{ "code": "...", "state": "..." }` to `/api/auth/google/callback` to exchange tokens and persist them in DynamoDB.
+4. Once connected, trade ingestion and analysis endpoints automatically refresh access tokens when they are about to expire.
 
 ### Packaging
 
@@ -107,144 +152,31 @@ Provide remaining variables (e.g., `gemini_api_key`) via CLI flags, a `.tfvars` 
 
 ## Next Steps
 
-- Implement Google OAuth token exchange + secure storage.
-- Replace Google Drive/Sheets stubs with real API calls (likely via Google SDKs).
-- Integrate Gemini text + vision models for high-quality analysis output.
-- Build automated tests for core services and Terraform validations (e.g., `terraform validate`, `pytest`).
-=======
-## Overview
-The AI-Powered Trading Journal Agent is a backend-first platform that helps active traders capture and analyze every aspect of their trades. It combines a low-friction ingestion workflow with an asynchronous intelligence layer so users can journal quickly, retain ownership of their data, and receive personalized coaching that improves their trading discipline.
+- Encrypt stored Google refresh tokens and enforce rotation/TTL policies.
+- Finish Gemini-based sentiment analysis, image inspection, and web research integrations.
+- Extend the LangGraph workflow with audio transcription and image analysis steps.
+- Backfill automated tests (FastAPI services, DynamoDB interactions) and add CI linters plus `terraform validate`.
 
-The system is organized around two cooperating agents:
+## Operational Notes
 
-* **Main Agent (FastAPI service):** Collects multi-modal trade inputs, persists them to the trader's Google assets, and provides an interactive API surface.
-* **Analysis Sub-Agent (AWS Lambda worker):** Processes queued analysis jobs, runs deep pattern discovery with Gemini models, and produces actionable feedback stored for later retrieval.
+- **API Quotas & Retries**
+  - Google Drive downloads use built-in retries with exponential backoff (3 attempts). Monitor for `HttpError` spikes and consider service account whitelisting if volume grows.
+  - SerpAPI calls retry automatically; track usage in the SerpAPI dashboard and adjust `num`/`engine` parameters for budget.
+  - Gemini usage is subject to generative model quotas—ensure API key permissions cover audio+vision workloads.
+- **Staging/Integration Testing**
+  - Integration tests require valid Google OAuth credentials with Drive/Sheets scopes and a SerpAPI key. Configure these via GitHub Secrets and run a nightly workflow once manual verification is complete.
+  - Current CI runs unit tests with stubs; e2e suites should mock external APIs or use dedicated sandbox accounts.
 
-## Core Problems Addressed
-* **Tedious data entry:** Manual journaling is slow and inconsistent. The agent automates file uploads, structured logging, and note-taking so users can submit a full entry in seconds.
-* **Scattered context:** Screenshots, audio reflections, and text notes live in different places. The agent correlates these artifacts inside Google Drive and Sheets and preserves relationships between them.
-* **Lack of objective insight:** Traders rarely review their journals rigorously. The analysis sub-agent continuously mines the data to highlight recurring behaviors, sentiment trends, and execution mistakes, supplementing its findings with targeted web research.
+### Trade Submission Flow
 
-## Feature Scope
-### In-Scope Functionality
-1. **Google OAuth 2.0 authentication**
-   * Request Google Sheets and Google Drive scopes through the Main Agent.
-   * Store encrypted refresh tokens (e.g., DynamoDB with KMS) so asynchronous jobs can operate on behalf of the user.
-2. **Trade ingestion API (Main Agent)**
-   * FastAPI endpoints accept trade metadata, images, and audio.
-   * `upload_file_to_drive` uploads media to a user-owned Drive folder and returns shareable links.
-   * `add_trade_to_sheet` writes a new row to the user's journal sheet, embedding Drive URLs and structured fields.
-3. **Analysis pipeline (Sub-Agent)**
-   * `queue_trade_analysis` enqueues analysis jobs into Amazon SQS.
-   * An AWS Lambda function (built with LangGraph) pulls jobs, orchestrates tool calls, and compiles findings.
-   * Tools include `read_trading_journal`, `transcribe_audio`, `analyze_trade_images`, and `google_web_search`.
-   * Generated insights are written to DynamoDB so they can be surfaced asynchronously.
-4. **Proactive reporting loop**
-   * Amazon EventBridge triggers scheduled analyses (e.g., weekly retrospectives) without user intervention.
-   * Notifications or summary reports can be pushed to email, chat, or exposed through future UI integrations.
+1. The client calls `POST /api/trades/submit` with:
+   - `content`: narrative text describing the trade.
+   - `attachments`: optional list of base64-encoded files (images, audio, video) with filename & `mime_type`.
+   - Optional explicit fields (`ticker`, `pnl`, etc.) to override Gemini output.
+2. The main agent invokes Gemini to extract `ticker`, `pnl`, `position_type`, `entry_timestamp`, `exit_timestamp`, and `notes`.
+3. Attachments are uploaded to Google Drive; the sheet row stores links in the format `drive_file_id|mime_type|shareable_link`.
+4. Both JSON and Markdown summaries of the resulting analysis are available via DynamoDB (`report`, `report_markdown`).
 
-### Out-of-Scope (Current Phase)
-* Executing or automating live trades.
-* Streaming or real-time market data ingestion.
-* Dedicated frontend (web/mobile) experiences.
+**Attachment Limits:** Only `image/*`, `audio/*`, and `video/*` MIME types up to 15 MB per file are accepted. Files outside these bounds will be rejected with a `400` error.
 
-## Target Users
-* **Active retail traders** seeking to institutionalize best practices and eliminate impulsive mistakes.
-* **Prop-firm traders** who must maintain detailed journals for compliance and risk reviews.
-
-## Architecture Overview
-```
-Trader → FastAPI Main Agent → (Sheets / Drive updates)
-                        ↓
-                 Amazon SQS queue → AWS Lambda Sub-Agent → (Gemini + analysis tools)
-                        ↓
-                    DynamoDB report store
-```
-
-### Main Agent Responsibilities
-* Serve authenticated REST endpoints for trade submission and analysis requests.
-* Manage OAuth 2.0 login flows, token refresh, and encryption of stored credentials.
-* Orchestrate immediate actions: file uploads, sheet row creation, and job dispatch.
-
-### Analysis Sub-Agent Responsibilities
-* Consume SQS messages with user context and analysis prompts.
-* Aggregate Google Sheet data, transcribe audio, and interpret images using Gemini Vision.
-* Perform web research to contextualize detected patterns.
-* Persist structured findings, sentiment scores, and recommendations for user retrieval.
-
-## Technology Stack
-| Layer | Technology | Purpose |
-| --- | --- | --- |
-| LLM | Google Gemini (Text + Vision) | Reasoning, pattern analysis, and content generation |
-| Agent Orchestration | LangGraph | Deterministic state-machine style tool chaining |
-| API Service | FastAPI on AWS (ECS Fargate or App Runner) | Hosts the Main Agent HTTP API |
-| Async Processing | Amazon SQS + AWS Lambda | Decouple long-running analysis tasks |
-| Data Stores | Google Sheets, Google Drive | Primary user-owned storage for journal entries |
-| Secrets & Tokens | AWS DynamoDB (+ KMS) | Secure token persistence and report storage |
-| Scheduling | Amazon EventBridge | Recurring triggers for proactive insights |
-| Infrastructure as Code | Terraform / CloudFormation | Reproducible cloud environment setup |
-
-## Data Lifecycle
-1. User authenticates via Google OAuth and grants Drive/Sheets access.
-2. Trader submits a journal entry through the FastAPI endpoint with text, attachments, and notes.
-3. Files are uploaded to a structured Drive folder while metadata rows are inserted into the user's Google Sheet.
-4. User or scheduler enqueues an analysis request.
-5. The Lambda sub-agent collects relevant trade data, analyzes it with Gemini and supporting tools, and writes a report to DynamoDB.
-6. Reports become accessible to the user via API or future notification channels.
-
-## Local Development
-1. **Clone the repository**
-   ```bash
-   git clone <repo-url>
-   cd AI-Powered-Trading-Journal-Agent
-   ```
-2. **Create a virtual environment**
-   ```bash
-   python -m venv .venv
-   source .venv/bin/activate
-   ```
-3. **Install dependencies**
-   ```bash
-   pip install -r requirements.txt
-   ```
-4. **Configure environment variables** (see below) and start the FastAPI server for development.
-   ```bash
-   uvicorn main:app --reload
-   ```
-
-## Environment Variables
-| Variable | Description |
-| --- | --- |
-| `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` | OAuth credentials for the Google project. |
-| `GOOGLE_REDIRECT_URI` | Callback URI configured in the Google console. |
-| `DYNAMODB_TABLE_NAME` | DynamoDB table storing encrypted tokens and analysis reports. |
-| `KMS_KEY_ID` | KMS key used to encrypt sensitive data before storage. |
-| `SQS_QUEUE_URL` | URL of the Amazon SQS queue for analysis jobs. |
-| `EVENTBRIDGE_BUS_NAME` | EventBridge bus used for scheduling recurring analyses. |
-| `GEMINI_API_KEY` | Credential used to access Gemini APIs for analysis tasks. |
-
-> Additional configuration such as AWS credentials, OAuth scopes, and Drive folder templates should be defined during infrastructure setup.
-
-## Infrastructure Notes
-* **Token security:** Store refresh tokens encrypted with AWS KMS before writing to DynamoDB.
-* **Deployment packaging:** Bundle the Lambda sub-agent with dependencies (or leverage container images) and manage versions via IaC.
-* **Observability:** Instrument both agents with CloudWatch metrics and structured logging to trace the analysis lifecycle.
-* **Cost controls:** Configure SQS/Lambda concurrency limits and Drive/Sheets quotas to avoid unexpected usage spikes.
-
-## Roadmap Highlights
-1. Build FastAPI endpoints and Google OAuth integration.
-2. Implement Drive/Sheets tooling and test end-to-end ingestion.
-3. Stand up SQS and Lambda infrastructure, then connect `queue_trade_analysis`.
-4. Integrate Gemini-based analysis with transcription and vision tooling.
-5. Add proactive EventBridge triggers and notification pathways.
-6. Explore user-facing interfaces (web dashboard, chat-based assistant) after backend stabilization.
-
-## Contributing
-1. Fork the repository and create a feature branch.
-2. Adhere to repository linting and testing standards (TBD).
-3. Submit a pull request detailing changes, tests, and validation steps.
-
-## License
-Specify the chosen license for the project (e.g., MIT, Apache 2.0) before release.
-
->>>>>>> eac423daf38678bd3397ef6c56c55133df8a01cf
+If the client already has structured data, `POST /api/trades` remains available and bypasses Gemini.

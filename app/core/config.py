@@ -42,6 +42,16 @@ class AWSSettings(BaseSettings):
     )
 
 
+class SecuritySettings(BaseSettings):
+    """Security-related configuration."""
+
+    token_encryption_secret: Optional[str] = Field(
+        None,
+        alias="TOKEN_ENCRYPTION_SECRET",
+        description="Secret used to derive the symmetric key for encrypting stored tokens.",
+    )
+
+
 class GeminiSettings(BaseSettings):
     """Configuration for Gemini model access."""
 
@@ -84,10 +94,16 @@ class AppSettings(BaseSettings):
         alias="FRONTEND_BASE_URL",
         description="Optional URL for redirecting users back to the front-end.",
     )
+    security: SecuritySettings = SecuritySettings()
     oauth: OAuthSettings = OAuthSettings()
     google: GoogleSettings = GoogleSettings()
     aws: AWSSettings = AWSSettings()
     gemini: GeminiSettings = GeminiSettings()
+    serpapi_api_key: Optional[str] = Field(
+        None,
+        alias="SERPAPI_API_KEY",
+        description="Optional SerpAPI key used for web research integration.",
+    )
 
 
 @lru_cache()

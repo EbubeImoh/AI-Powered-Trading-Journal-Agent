@@ -13,6 +13,7 @@ class AnalysisJobPayload(TypedDict):
     job_id: str
     user_id: str
     sheet_id: str
+    sheet_range: Optional[str]
     prompt: str
     start_date: Optional[str]
     end_date: Optional[str]
@@ -24,6 +25,7 @@ class AnalysisState(TypedDict, total=False):
 
     job: AnalysisJobPayload
     trades: List[Dict[str, Any]]
+    assets: List[Dict[str, Any]]
     transcriptions: List[Dict[str, Any]]
     image_insights: List[Dict[str, Any]]
     external_research: List[Dict[str, Any]]
