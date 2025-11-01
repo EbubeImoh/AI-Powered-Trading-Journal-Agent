@@ -1,2 +1,6 @@
 # All dependencies must be explicitly pinned with `==`.
-# No runtime dependencies are required at initialization.
+fastapi==0.95.2
+uvicorn[standard]==0.22.0
+pydantic==1.10.13
+boto3==1.34.69
+langgraph==0.0.40
