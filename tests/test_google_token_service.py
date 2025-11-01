@@ -1,6 +1,11 @@
 from __future__ import annotations
-from datetime import datetime, timedelta, timezone
 
+try:
+    from . import _bootstrap  # noqa: F401
+except Exception:  # pragma: no cover - fallback for direct execution
+    import _bootstrap  # type: ignore # noqa: F401
+
+from datetime import datetime, timedelta, timezone
 import pytest
 
 from app.core.config import GoogleSettings, OAuthSettings
@@ -38,9 +43,9 @@ async def test_get_credentials_refreshes_and_updates_storage() -> None:
     oauth_client = DummyOAuthClient()
 
     settings = GoogleSettings(
-        GOOGLE_CLIENT_ID="client",
-        GOOGLE_CLIENT_SECRET="secret",
-        GOOGLE_REDIRECT_URI="https://example.com/callback",
+        client_id="client",
+        client_secret="secret",
+        redirect_uri="https://example.com/callback",
     )
     oauth_settings = OAuthSettings()
 
@@ -82,9 +87,9 @@ async def test_get_credentials_migrates_plaintext_tokens() -> None:
     oauth_client = DummyOAuthClient()
 
     settings = GoogleSettings(
-        GOOGLE_CLIENT_ID="client",
-        GOOGLE_CLIENT_SECRET="secret",
-        GOOGLE_REDIRECT_URI="https://example.com/callback",
+        client_id="client",
+        client_secret="secret",
+        redirect_uri="https://example.com/callback",
     )
     oauth_settings = OAuthSettings()
 

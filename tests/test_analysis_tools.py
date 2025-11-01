@@ -1,3 +1,8 @@
+try:
+    from . import _bootstrap  # noqa: F401
+except Exception:  # pragma: no cover - fallback for direct execution
+    import _bootstrap  # type: ignore # noqa: F401
+
 import asyncio
 
 import pytest

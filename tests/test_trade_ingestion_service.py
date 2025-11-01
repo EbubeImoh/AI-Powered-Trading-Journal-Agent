@@ -1,3 +1,8 @@
+try:
+    from . import _bootstrap  # noqa: F401
+except Exception:  # pragma: no cover - fallback for direct execution
+    import _bootstrap  # type: ignore # noqa: F401
+
 import base64
 
 import pytest
@@ -15,7 +20,7 @@ class StubDriveClient:
         self.uploads.append((user_id, file_name, mime_type, tags))
         return {
             "drive_file_id": file_name,
-            "shareable_link": f"https://drive/{file_name}",
+            "shareable_link": f"https://drive.example.com/{file_name}",
             "mime_type": mime_type,
         }
 

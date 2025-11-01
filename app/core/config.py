@@ -14,12 +14,12 @@ from pydantic import BaseSettings, Field, HttpUrl, validator
 class GoogleSettings(BaseSettings):
     """Configuration required for interacting with Google APIs."""
 
-    client_id: str = Field(..., alias="GOOGLE_CLIENT_ID")
-    client_secret: str = Field(..., alias="GOOGLE_CLIENT_SECRET")
-    redirect_uri: HttpUrl = Field(..., alias="GOOGLE_REDIRECT_URI")
+    client_id: str = Field(..., env="GOOGLE_CLIENT_ID")
+    client_secret: str = Field(..., env="GOOGLE_CLIENT_SECRET")
+    redirect_uri: HttpUrl = Field(..., env="GOOGLE_REDIRECT_URI")
     drive_root_folder_id: Optional[str] = Field(
         None,
-        alias="GOOGLE_DRIVE_ROOT_FOLDER_ID",
+        env="GOOGLE_DRIVE_ROOT_FOLDER_ID",
         description="Optional target folder to contain uploaded assets.",
     )
 
@@ -27,17 +27,17 @@ class GoogleSettings(BaseSettings):
 class AWSSettings(BaseSettings):
     """Settings for AWS services used by the platform."""
 
-    region_name: str = Field("us-east-1", alias="AWS_REGION")
-    sqs_queue_url: str = Field(..., alias="ANALYSIS_QUEUE_URL")
+    region_name: str = Field("us-east-1", env="AWS_REGION")
+    sqs_queue_url: str = Field(..., env="ANALYSIS_QUEUE_URL")
     analysis_lambda_arn: Optional[str] = Field(
         None,
-        alias="ANALYSIS_LAMBDA_ARN",
+        env="ANALYSIS_LAMBDA_ARN",
         description="Optional ARN used for tracing or warm invocations.",
     )
-    dynamodb_table_name: str = Field(..., alias="DYNAMODB_TABLE_NAME")
+    dynamodb_table_name: str = Field(..., env="DYNAMODB_TABLE_NAME")
     eventbridge_bus_name: Optional[str] = Field(
         None,
-        alias="EVENTBRIDGE_BUS_NAME",
+        env="EVENTBRIDGE_BUS_NAME",
         description="Custom bus for proactive analyses. Defaults to default bus when omitted.",
     )
 
@@ -47,7 +47,7 @@ class SecuritySettings(BaseSettings):
 
     token_encryption_secret: Optional[str] = Field(
         None,
-        alias="TOKEN_ENCRYPTION_SECRET",
+        env="TOKEN_ENCRYPTION_SECRET",
         description="Secret used to derive the symmetric key for encrypting stored tokens.",
     )
 
@@ -55,17 +55,17 @@ class SecuritySettings(BaseSettings):
 class GeminiSettings(BaseSettings):
     """Configuration for Gemini model access."""
 
-    api_key: str = Field(..., alias="GEMINI_API_KEY")
-    model_name: str = Field("gemini-1.5-pro", alias="GEMINI_MODEL_NAME")
+    api_key: str = Field(..., env="GEMINI_API_KEY")
+    model_name: str = Field("gemini-1.5-pro", env="GEMINI_MODEL_NAME")
     vision_model_name: str = Field(
-        "gemini-1.5-flash", alias="GEMINI_VISION_MODEL_NAME"
+        "gemini-1.5-flash", env="GEMINI_VISION_MODEL_NAME"
     )
 
 
 class OAuthSettings(BaseSettings):
     """OAuth flow configuration."""
 
-    state_ttl_seconds: int = Field(900, alias="OAUTH_STATE_TTL")
+    state_ttl_seconds: int = Field(900, env="OAUTH_STATE_TTL")
     scopes: tuple[str, ...] = Field(
         (
             "https://www.googleapis.com/auth/drive.file",
@@ -73,7 +73,7 @@ class OAuthSettings(BaseSettings):
             "https://www.googleapis.com/auth/userinfo.email",
             "openid",
         ),
-        alias="OAUTH_SCOPES",
+        env="OAUTH_SCOPES",
     )
 
     @validator("scopes", pre=True)
@@ -87,21 +87,21 @@ class OAuthSettings(BaseSettings):
 class AppSettings(BaseSettings):
     """Root settings object for the FastAPI application."""
 
-    environment: str = Field("development", alias="APP_ENV")
-    log_level: str = Field("INFO", alias="APP_LOG_LEVEL")
+    environment: str = Field("development", env="APP_ENV")
+    log_level: str = Field("INFO", env="APP_LOG_LEVEL")
     frontend_base_url: Optional[HttpUrl] = Field(
         None,
-        alias="FRONTEND_BASE_URL",
+        env="FRONTEND_BASE_URL",
         description="Optional URL for redirecting users back to the front-end.",
     )
-    security: SecuritySettings = SecuritySettings()
-    oauth: OAuthSettings = OAuthSettings()
-    google: GoogleSettings = GoogleSettings()
-    aws: AWSSettings = AWSSettings()
-    gemini: GeminiSettings = GeminiSettings()
+    security: SecuritySettings = Field(default_factory=SecuritySettings)
+    oauth: OAuthSettings = Field(default_factory=OAuthSettings)
+    google: GoogleSettings = Field(default_factory=GoogleSettings)
+    aws: AWSSettings = Field(default_factory=AWSSettings)
+    gemini: GeminiSettings = Field(default_factory=GeminiSettings)
     serpapi_api_key: Optional[str] = Field(
         None,
-        alias="SERPAPI_API_KEY",
+        env="SERPAPI_API_KEY",
         description="Optional SerpAPI key used for web research integration.",
     )
 
