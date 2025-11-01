@@ -28,7 +28,9 @@ class TokenCipherService:
         try:
             plaintext = self._fernet.decrypt(ciphertext.encode("utf-8"))
         except InvalidToken as exc:  # pragma: no cover - defensive
-            raise ValueError("Failed to decrypt token; invalid ciphertext provided.") from exc
+            raise ValueError(
+                "Failed to decrypt token; invalid ciphertext provided."
+            ) from exc
         return plaintext.decode("utf-8")
 
 

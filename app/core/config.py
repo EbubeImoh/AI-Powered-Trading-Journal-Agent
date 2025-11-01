@@ -6,9 +6,34 @@ analysis agent can share a consistent configuration surface.
 """
 
 from functools import lru_cache
+from pathlib import Path
 from typing import Optional
 
-from pydantic import BaseSettings, Field, HttpUrl, validator
+import os
+
+from pydantic import AnyHttpUrl, BaseSettings, Field, HttpUrl, validator
+
+
+def _load_env_file(path: str = ".env") -> None:
+    """Best-effort load key=value pairs from a .env file without extra deps."""
+    env_path = Path(path)
+    if not env_path.exists():
+        return
+    for raw_line in env_path.read_text().splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#"):
+            continue
+        key, sep, value = line.partition("=")
+        if not sep:
+            continue
+        key = key.strip()
+        if not key or key in os.environ:
+            continue
+        cleaned = value.strip().strip('"').strip("'")
+        os.environ[key] = cleaned
+
+
+_load_env_file()
 
 
 class GoogleSettings(BaseSettings):
@@ -16,7 +41,7 @@ class GoogleSettings(BaseSettings):
 
     client_id: str = Field(..., env="GOOGLE_CLIENT_ID")
     client_secret: str = Field(..., env="GOOGLE_CLIENT_SECRET")
-    redirect_uri: HttpUrl = Field(..., env="GOOGLE_REDIRECT_URI")
+    redirect_uri: AnyHttpUrl = Field(..., env="GOOGLE_REDIRECT_URI")
     drive_root_folder_id: Optional[str] = Field(
         None,
         env="GOOGLE_DRIVE_ROOT_FOLDER_ID",
@@ -38,7 +63,9 @@ class AWSSettings(BaseSettings):
     eventbridge_bus_name: Optional[str] = Field(
         None,
         env="EVENTBRIDGE_BUS_NAME",
-        description="Custom bus for proactive analyses. Defaults to default bus when omitted.",
+        description=(
+            "Custom bus for proactive analyses. Defaults to default bus when omitted."
+        ),
     )
 
 
@@ -48,7 +75,9 @@ class SecuritySettings(BaseSettings):
     token_encryption_secret: Optional[str] = Field(
         None,
         env="TOKEN_ENCRYPTION_SECRET",
-        description="Secret used to derive the symmetric key for encrypting stored tokens.",
+        description=(
+            "Secret used to derive the symmetric key for encrypting stored tokens."
+        ),
     )
 
 
@@ -57,9 +86,7 @@ class GeminiSettings(BaseSettings):
 
     api_key: str = Field(..., env="GEMINI_API_KEY")
     model_name: str = Field("gemini-1.5-pro", env="GEMINI_MODEL_NAME")
-    vision_model_name: str = Field(
-        "gemini-1.5-flash", env="GEMINI_VISION_MODEL_NAME"
-    )
+    vision_model_name: str = Field("gemini-1.5-flash", env="GEMINI_VISION_MODEL_NAME")
 
 
 class OAuthSettings(BaseSettings):
@@ -77,11 +104,18 @@ class OAuthSettings(BaseSettings):
     )
 
     @validator("scopes", pre=True)
-    def _split_scopes(cls, value: str | tuple[str, ...]) -> tuple[str, ...]:
+    def _split_scopes(
+        cls, value: str | tuple[str, ...] | list[str]
+    ) -> tuple[str, ...]:
         """Support providing scopes as a comma-separated string."""
         if isinstance(value, tuple):
             return value
+        if isinstance(value, list):
+            return tuple(value)
         return tuple(scope.strip() for scope in value.split(",") if scope.strip())
+
+    class Config:
+        env_json_loads = staticmethod(lambda v: v)
 
 
 class AppSettings(BaseSettings):
@@ -104,6 +138,10 @@ class AppSettings(BaseSettings):
         env="SERPAPI_API_KEY",
         description="Optional SerpAPI key used for web research integration.",
     )
+
+    class Config:
+        env_file = ".env"
+        env_file_encoding = "utf-8"
 
 
 @lru_cache()

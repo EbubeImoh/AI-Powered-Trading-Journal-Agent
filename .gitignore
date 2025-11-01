@@ -2,9 +2,39 @@
 __pycache__/
 *.py[cod]
 *.egg-info/
+*.pyo
+*.pyd
+
+# Build artifacts
+dist/
+build/
+
+# Coverage
+.coverage
+.coverage.*
+coverage.xml
+htmlcov/
+
+# Test and lint caches
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+
+# Logs
+*.log
+
+# Environment files
+.env
+.python-version
 
 # Virtual environment
 .venv/
+venv/
+env/
 
 # macOS
 .DS_Store
+
+# IDE settings
+.vscode/
+.idea/

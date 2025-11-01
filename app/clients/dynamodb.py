@@ -24,7 +24,9 @@ class DynamoDBClient:
         """Put an item in the DynamoDB table."""
         self._table.put_item(Item=item)
 
-    def get_item(self, partition_key: str, sort_key: Optional[str] = None) -> Optional[Dict[str, Any]]:
+    def get_item(
+        self, partition_key: str, sort_key: Optional[str] = None
+    ) -> Optional[Dict[str, Any]]:
         """Retrieve an item using its key."""
         key: Dict[str, Any] = {"pk": partition_key}
         if sort_key is not None:

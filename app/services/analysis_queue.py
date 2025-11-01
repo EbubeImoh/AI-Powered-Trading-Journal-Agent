@@ -52,7 +52,9 @@ class AnalysisQueueService:
         return f"{user_id}-{timestamp}"
 
     @staticmethod
-    def _build_message_payload(*, job_id: str, request: AnalysisRequest) -> Dict[str, Any]:
+    def _build_message_payload(
+        *, job_id: str, request: AnalysisRequest
+    ) -> Dict[str, Any]:
         """Construct the message payload for the analysis worker."""
         return {
             "job_id": job_id,
@@ -60,7 +62,9 @@ class AnalysisQueueService:
             "prompt": request.prompt,
             "sheet_id": request.sheet_id,
             "sheet_range": request.sheet_range,
-            "start_date": request.start_date.isoformat() if request.start_date else None,
+            "start_date": request.start_date.isoformat()
+            if request.start_date
+            else None,
             "end_date": request.end_date.isoformat() if request.end_date else None,
             "requested_at": datetime.now(tz=timezone.utc).isoformat(),
         }

@@ -81,3 +81,24 @@ Impact and Risk Analysis
 - Gemini/SerpAPI usage may incur costs; operational notes and optional configuration help control exposure.
 - Structured JSON parsing reduces report ambiguity but requires downstream clients to handle schema evolution (documented in README).
 - Retry loops cap attempts to avoid runaway executions; further batching/caching can be explored if latency becomes a concern.
+
+---
+
+Date: 2025-11-01
+Author: @EbubeImoh
+
+Pre-Implementation Notes
+
+Proposed Modifications
+- Enhance `.gitignore` to exclude additional environment files, caches, coverage artifacts, build outputs, and local IDE settings.
+- Specifically add: `.env`, `.python-version`, `.pytest_cache/`, `.ruff_cache/`, `.mypy_cache/`, `.coverage`, `.coverage.*`, `coverage.xml`, `htmlcov/`, `dist/`, `build/`, `*.log`, `venv/`, `env/`, `.vscode/`, `.idea/`.
+
+Justification
+- Prevents accidental commit of secrets (`.env`) and machine-specific files, reducing risk and noise in version control.
+- Excludes transient test and lint caches plus coverage outputs to keep history clean and CI signal-focused.
+- Ignores build artifacts and editor settings to maintain cross-developer consistency and avoid spurious diffs.
+
+Impact and Risk Analysis
+- Low operational risk: Changes only affect Git tracking rules; runtime behavior is unchanged.
+- Existing tracked files like `.env` will not be removed automatically; if present in history, contributors must `git rm --cached` them explicitly.
+- Improves developer workflow by reducing accidental commits and repository bloat; no compatibility impact on tooling.

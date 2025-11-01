@@ -31,7 +31,10 @@ async def request_with_retry(
             response = await func(*args, **kwargs)
             response.raise_for_status()
             return response
-        except (httpx.HTTPError, httpx.TimeoutException) as exc:  # pragma: no cover - network path
+        except (
+            httpx.HTTPError,
+            httpx.TimeoutException,
+        ) as exc:  # pragma: no cover - network path
             last_exception = exc
             attempt += 1
             if attempt >= config.attempts:

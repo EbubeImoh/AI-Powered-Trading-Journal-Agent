@@ -6,7 +6,7 @@ import asyncio
 import base64
 import io
 import time
-from typing import Iterable, Optional, TYPE_CHECKING
+from typing import TYPE_CHECKING, Iterable, Optional
 
 from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
@@ -19,7 +19,11 @@ if TYPE_CHECKING:  # pragma: no cover - type hints only
 class GoogleDriveClient:
     """Upload trade artifacts to Google Drive."""
 
-    def __init__(self, token_service: "GoogleTokenService", drive_root_folder_id: str | None = None) -> None:
+    def __init__(
+        self,
+        token_service: "GoogleTokenService",
+        drive_root_folder_id: str | None = None,
+    ) -> None:
         self._token_service = token_service
         self._drive_root_folder_id = drive_root_folder_id
 
@@ -37,19 +41,29 @@ class GoogleDriveClient:
         credentials = await self._token_service.get_credentials(user_id=user_id)
 
         def _execute_upload() -> dict:
-            service = build("drive", "v3", credentials=credentials, cache_discovery=False)
+            service = build(
+                "drive", "v3", credentials=credentials, cache_discovery=False
+            )
             file_metadata = {"name": file_name}
-            app_properties = {f"tag_{index}": tag for index, tag in enumerate(tags or [], start=1)}
+            app_properties = {
+                f"tag_{index}": tag for index, tag in enumerate(tags or [], start=1)
+            }
             if app_properties:
                 file_metadata["appProperties"] = app_properties
 
             if self._drive_root_folder_id:
                 file_metadata["parents"] = [self._drive_root_folder_id]
 
-            media = MediaIoBaseUpload(io.BytesIO(file_bytes), mimetype=mime_type, resumable=False)
+            media = MediaIoBaseUpload(
+                io.BytesIO(file_bytes), mimetype=mime_type, resumable=False
+            )
             created = (
                 service.files()
-                .create(body=file_metadata, media_body=media, fields="id, webViewLink, mimeType")
+                .create(
+                    body=file_metadata,
+                    media_body=media,
+                    fields="id, webViewLink, mimeType",
+                )
                 .execute()
             )
 
@@ -70,7 +84,9 @@ class GoogleDriveClient:
         credentials = await self._token_service.get_credentials(user_id=user_id)
 
         def _execute_download() -> bytes:
-            service = build("drive", "v3", credentials=credentials, cache_discovery=False)
+            service = build(
+                "drive", "v3", credentials=credentials, cache_discovery=False
+            )
             attempt = 0
             while attempt < 3:
                 try:
@@ -96,7 +112,9 @@ class GoogleDriveClient:
         credentials = await self._token_service.get_credentials(user_id=user_id)
 
         def _execute_metadata() -> dict:
-            service = build("drive", "v3", credentials=credentials, cache_discovery=False)
+            service = build(
+                "drive", "v3", credentials=credentials, cache_discovery=False
+            )
             return (
                 service.files()
                 .get(fileId=file_id, fields="id,name,mimeType,webViewLink")

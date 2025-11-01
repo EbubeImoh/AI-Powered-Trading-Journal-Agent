@@ -13,7 +13,6 @@ from hashlib import sha256
 from typing import Any, Dict, Tuple
 
 import httpx
-
 from fastapi import HTTPException, status
 
 from app.core.config import GoogleSettings, OAuthSettings
@@ -27,8 +26,12 @@ class OAuthStateEncoder:
 
     def encode(self, payload: Dict[str, Any]) -> str:
         serialized = json.dumps(payload, separators=(",", ":"), sort_keys=True)
-        signature = hmac.new(self._secret_key, serialized.encode("utf-8"), sha256).digest()
-        return base64.urlsafe_b64encode(signature + serialized.encode("utf-8")).decode("utf-8")
+        signature = hmac.new(
+            self._secret_key, serialized.encode("utf-8"), sha256
+        ).digest()
+        return base64.urlsafe_b64encode(signature + serialized.encode("utf-8")).decode(
+            "utf-8"
+        )
 
     def decode(self, token: str) -> Dict[str, Any]:
         decoded = base64.urlsafe_b64decode(token.encode("utf-8"))
@@ -56,7 +59,9 @@ class GoogleOAuthClient:
     AUTH_BASE_URL = "https://accounts.google.com/o/oauth2/v2/auth"
     TOKEN_URL = "https://oauth2.googleapis.com/token"
 
-    def __init__(self, google_settings: GoogleSettings, oauth_settings: OAuthSettings) -> None:
+    def __init__(
+        self, google_settings: GoogleSettings, oauth_settings: OAuthSettings
+    ) -> None:
         self._google = google_settings
         self._oauth = oauth_settings
 
@@ -103,7 +108,9 @@ class GoogleOAuthClient:
         expires_in = token_payload.get("expires_in")
 
         if not access_token or not refresh_token or not expires_in:
-            raise OAuthTokenExchangeError("Incomplete token payload returned from Google.")
+            raise OAuthTokenExchangeError(
+                "Incomplete token payload returned from Google."
+            )
 
         return access_token, refresh_token, int(expires_in)
 
@@ -127,7 +134,9 @@ class GoogleOAuthClient:
         expires_in = token_payload.get("expires_in")
 
         if not access_token or not expires_in:
-            raise OAuthTokenExchangeError("Incomplete refresh payload returned from Google.")
+            raise OAuthTokenExchangeError(
+                "Incomplete refresh payload returned from Google."
+            )
 
         return access_token, int(expires_in)
 

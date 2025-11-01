@@ -10,6 +10,9 @@ import logging
 from datetime import datetime, timezone
 from typing import Any, Dict, List
 
+from agents.analysis_lambda.graph import create_analysis_graph
+from agents.analysis_lambda.models import AnalysisJobPayload
+from agents.analysis_lambda.tools import AnalysisTools
 from app.clients import (
     DynamoDBClient,
     GeminiClient,
@@ -18,13 +21,10 @@ from app.clients import (
     GoogleSheetsClient,
     WebSearchClient,
 )
+from app.clients.google_auth import OAuthTokenNotFoundError
 from app.core.config import get_settings
 from app.core.logging import configure_logging
 from app.services import GoogleTokenService, TokenCipherService
-from app.clients.google_auth import OAuthTokenNotFoundError
-from agents.analysis_lambda.graph import create_analysis_graph
-from agents.analysis_lambda.models import AnalysisJobPayload
-from agents.analysis_lambda.tools import AnalysisTools
 
 logger = logging.getLogger(__name__)
 
@@ -37,7 +37,8 @@ def _bootstrap() -> Dict[str, Any]:
     dynamodb = DynamoDBClient(settings.aws)
     oauth_client = GoogleOAuthClient(settings.google, settings.oauth)
     token_cipher = TokenCipherService(
-        secret=settings.security.token_encryption_secret or settings.google.client_secret
+        secret=settings.security.token_encryption_secret
+        or settings.google.client_secret
     )
     token_service = GoogleTokenService(
         dynamodb_client=dynamodb,
@@ -78,7 +79,9 @@ async def _process_job(payload: AnalysisJobPayload) -> None:
     try:
         final_state = await graph.ainvoke({"job": payload})
     except OAuthTokenNotFoundError as exc:
-        logger.error("Missing OAuth tokens for analysis job", extra={"job_id": payload["job_id"]})
+        logger.error(
+            "Missing OAuth tokens for analysis job", extra={"job_id": payload["job_id"]}
+        )
         _persist_job_record(
             dynamodb=dynamodb,
             payload=payload,
@@ -87,7 +90,10 @@ async def _process_job(payload: AnalysisJobPayload) -> None:
         )
         return
     except Exception as exc:  # pragma: no cover - defensive logging
-        logger.exception("Unexpected failure while running analysis job", extra={"job_id": payload["job_id"]})
+        logger.exception(
+            "Unexpected failure while running analysis job",
+            extra={"job_id": payload["job_id"]},
+        )
         _persist_job_record(
             dynamodb=dynamodb,
             payload=payload,

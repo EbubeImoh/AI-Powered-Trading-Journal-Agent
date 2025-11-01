@@ -6,7 +6,6 @@ import os
 import sys
 from pathlib import Path
 
-
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
 if str(PROJECT_ROOT) not in sys.path:
@@ -25,4 +24,3 @@ _DEFAULT_ENV_VARS: dict[str, str] = {
 
 for key, value in _DEFAULT_ENV_VARS.items():
     os.environ.setdefault(key, value)
-

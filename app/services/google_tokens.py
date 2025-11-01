@@ -69,7 +69,9 @@ class GoogleTokenService:
             self._ddb.put_item(record)
 
         if not encrypted_access_token or not encrypted_refresh_token or not expires_at:
-            raise OAuthTokenNotFoundError("Stored OAuth token is missing required fields.")
+            raise OAuthTokenNotFoundError(
+                "Stored OAuth token is missing required fields."
+            )
 
         access_token = self._cipher.decrypt(encrypted_access_token)
         refresh_token = self._cipher.decrypt(encrypted_refresh_token)

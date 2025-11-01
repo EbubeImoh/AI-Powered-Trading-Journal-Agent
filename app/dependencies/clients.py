@@ -1,6 +1,7 @@
 """
 Factory functions to provide shared clients and services as FastAPI dependencies.
 """
+
 from functools import lru_cache
 
 from app.clients import (

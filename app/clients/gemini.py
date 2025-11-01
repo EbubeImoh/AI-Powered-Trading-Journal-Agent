@@ -59,13 +59,16 @@ class GeminiClient:
 
         def _invoke() -> str:
             model = genai.GenerativeModel(self._settings.vision_model_name)
-            response = model.generate_content([
-                prompt,
-                {
-                    "mime_type": mime_type,
-                    "data": image_base64,
-                },
-            ], safety_settings=[])
+            response = model.generate_content(
+                [
+                    prompt,
+                    {
+                        "mime_type": mime_type,
+                        "data": image_base64,
+                    },
+                ],
+                safety_settings=[],
+            )
             return response.text or ""
 
         raw = await asyncio.to_thread(_invoke)
@@ -82,15 +85,18 @@ class GeminiClient:
 
         def _invoke() -> str:
             model = genai.GenerativeModel(self._settings.model_name)
-            response = model.generate_content([
-                {
-                    "role": "user",
-                    "parts": [
-                        {"text": prompt},
-                        {"mime_type": mime_type, "data": audio_base64},
-                    ],
-                }
-            ], safety_settings=[])
+            response = model.generate_content(
+                [
+                    {
+                        "role": "user",
+                        "parts": [
+                            {"text": prompt},
+                            {"mime_type": mime_type, "data": audio_base64},
+                        ],
+                    }
+                ],
+                safety_settings=[],
+            )
             return response.text or ""
 
         raw = await asyncio.to_thread(_invoke)
@@ -111,21 +117,29 @@ class GeminiClient:
         def _invoke() -> str:
             model = genai.GenerativeModel(self._settings.model_name)
             prompt = dedent(
-                f"""
-                You are a trading journal assistant. Analyse the user's description and return JSON with keys:
-                ticker (string), pnl (number), position_type (string), entry_timestamp (ISO8601 string), exit_timestamp (ISO8601 string), notes (string).
-                Use attachment metadata when relevant: {attachments_section}
-                Prefer using explicit overrides when provided: {overrides_section}
-                User submission:
-                {content}
-                """
+                (
+                    "You are a trading journal assistant. Analyse the user's "
+                    "description and return JSON with keys: ticker (string), "
+                    "pnl (number), "
+                    "position_type (string), entry_timestamp (ISO8601 string), "
+                    "exit_timestamp (ISO8601 string), notes (string).\n"
+                    "Use attachment metadata when relevant: "
+                    f"{attachments_section}\n"
+                    "Prefer using explicit overrides when provided: "
+                    f"{overrides_section}\n"
+                    "User submission:\n"
+                    f"{content}"
+                )
             )
-            response = model.generate_content([
-                {
-                    "role": "user",
-                    "parts": [prompt],
-                }
-            ], safety_settings=[])
+            response = model.generate_content(
+                [
+                    {
+                        "role": "user",
+                        "parts": [prompt],
+                    }
+                ],
+                safety_settings=[],
+            )
             return response.text or ""
 
         raw = await asyncio.to_thread(_invoke)
@@ -157,26 +171,55 @@ def _build_analysis_prompt(
 ) -> list[str | dict[str, Any]]:
     """Construct a structured prompt for the Gemini model."""
     header = dedent(
-        f"""
-        System Instructions:
-        {system_prompt}
-
-        User Request:
-        {job_prompt}
-
-        Incorporate the following data sources to produce a structured coaching report. Use bullet points, call out recurring behaviours, and end with 2-3 prioritized action items.
-        """
+        (
+            "System Instructions:\n"
+            f"{system_prompt}\n\n"
+            "User Request:\n"
+            f"{job_prompt}\n\n"
+            "Incorporate the following data sources to produce a structured coaching "
+            "report. Use bullet points, call out recurring behaviours, and end with "
+            "2-3 prioritized action items.\n"
+        )
     )
 
     sections: list[str | dict[str, Any]] = [header]
-    sections.append({"role": "user", "parts": ["Journal Entries", json.dumps(_flatten_dicts(trades))]})
+    sections.append(
+        {
+            "role": "user",
+            "parts": ["Journal Entries", json.dumps(_flatten_dicts(trades))],
+        }
+    )
 
     if audio_insights:
-        sections.append({"role": "user", "parts": ["Audio Sentiment", json.dumps(_flatten_dicts(audio_insights))]})
+        sections.append(
+            {
+                "role": "user",
+                "parts": [
+                    "Audio Sentiment",
+                    json.dumps(_flatten_dicts(audio_insights)),
+                ],
+            }
+        )
     if image_insights:
-        sections.append({"role": "user", "parts": ["Chart Reviews", json.dumps(_flatten_dicts(image_insights))]})
+        sections.append(
+            {
+                "role": "user",
+                "parts": [
+                    "Chart Reviews",
+                    json.dumps(_flatten_dicts(image_insights)),
+                ],
+            }
+        )
     if web_research:
-        sections.append({"role": "user", "parts": ["Research", json.dumps(_flatten_dicts(web_research))]})
+        sections.append(
+            {
+                "role": "user",
+                "parts": [
+                    "Research",
+                    json.dumps(_flatten_dicts(web_research)),
+                ],
+            }
+        )
 
     sections.append(
         {
@@ -184,8 +227,10 @@ def _build_analysis_prompt(
             "parts": [
                 (
                     "Respond strictly in JSON with the schema: {"
-                    '"performance_overview": {"summary": string, "key_metrics": [string]}, '
-                    '"behavioural_patterns": [string], "opportunities": [string], '
+                    '"performance_overview": {"summary": string, '
+                    '"key_metrics": [string]}, '
+                    '"behavioural_patterns": [string], '
+                    '"opportunities": [string], '
                     '"action_plan": [{"title": string, "detail": string}]}. '
                     "Do not include prose outside the JSON object."
                 ),

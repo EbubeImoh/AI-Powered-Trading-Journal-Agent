@@ -21,6 +21,11 @@ This document maintains a chronological record of project changes.
 - Authored Terraform IaC templates for SQS, DynamoDB, Lambda, and EventBridge.
 - Documented architecture and setup instructions in `README.md`.
 
+## [2025-11-01] Git ignore hygiene improvements
+- Expanded `.gitignore` to exclude environment files (`.env`), Python caches and tooling caches (`.pytest_cache/`, `.ruff_cache/`, `.mypy_cache/`), coverage artifacts (`.coverage*`, `coverage.xml`, `htmlcov/`), build outputs (`dist/`, `build/`), logs (`*.log`), additional virtual environment directories (`venv/`, `env/`), and local IDE settings (`.vscode/`, `.idea/`).
+
+Author: @EbubeImoh
+
 ## [2025-10-31] Initial repository setup
 - Initialized Git repository with `main` branch.
 - Added `.gitignore` to exclude Python artifacts and `.venv`.

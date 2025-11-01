@@ -34,7 +34,9 @@ class StubExtractionService:
 
 
 class StubIngestionService:
-    async def ingest_trade(self, *, request, sheet_id, sheet_range=None, attachments=None):
+    async def ingest_trade(
+        self, *, request, sheet_id, sheet_range=None, attachments=None
+    ):
         return TradeIngestionResponse(sheet_row_id="row-1", uploaded_files=[])
 
 

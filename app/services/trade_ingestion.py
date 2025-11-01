@@ -75,7 +75,9 @@ class TradeIngestionService:
                 )
             )
 
-        sheet_row = self._build_sheet_row(request=request, uploaded_files=uploaded_files)
+        sheet_row = self._build_sheet_row(
+            request=request, uploaded_files=uploaded_files
+        )
         row_id = await self._sheets.append_trade_row(
             user_id=request.user_id,
             sheet_id=sheet_id,
@@ -83,7 +85,9 @@ class TradeIngestionService:
             sheet_range=sheet_range,
         )
 
-        return TradeIngestionResponse(sheet_row_id=row_id, uploaded_files=uploaded_files)
+        return TradeIngestionResponse(
+            sheet_row_id=row_id, uploaded_files=uploaded_files
+        )
 
     async def _upload_attachment(
         self,
@@ -94,22 +98,28 @@ class TradeIngestionService:
         """Upload a trade attachment to Drive and return metadata."""
         try:
             payload = base64.b64decode(attachment.file_b64, validate=True)
-        except (ValueError, binascii.Error):  # pragma: no cover - defensive
+        except (ValueError, binascii.Error) as exc:  # pragma: no cover - defensive
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail=f"Attachment {attachment.filename} is not valid base64.",
-            )
+            ) from exc
 
         if len(payload) > self._MAX_ATTACHMENT_BYTES:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail=f"Attachment {attachment.filename} exceeds {self._MAX_ATTACHMENT_BYTES // (1024 * 1024)}MB limit.",
+                detail=(
+                    f"Attachment {attachment.filename} exceeds "
+                    f"{self._MAX_ATTACHMENT_BYTES // (1024 * 1024)}MB limit."
+                ),
             )
 
         if not attachment.mime_type.startswith(self._ALLOWED_MIME_PREFIXES):
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail=f"Attachment {attachment.filename} has unsupported MIME type {attachment.mime_type}.",
+                detail=(
+                    f"Attachment {attachment.filename} has unsupported MIME type "
+                    f"{attachment.mime_type}."
+                ),
             )
 
         metadata = await self._drive.upload_base64_file(
@@ -131,7 +141,8 @@ class TradeIngestionService:
         entry_ts = request.entry_timestamp.astimezone(timezone.utc).isoformat()
         exit_ts = request.exit_timestamp.astimezone(timezone.utc).isoformat()
         file_links = "; ".join(
-            f"{link.drive_file_id}|{link.mime_type}|{link.shareable_link}" for link in uploaded_files
+            f"{link.drive_file_id}|{link.mime_type}|{link.shareable_link}"
+            for link in uploaded_files
         )
 
         return [

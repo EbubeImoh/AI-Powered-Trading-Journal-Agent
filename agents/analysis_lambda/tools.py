@@ -7,7 +7,12 @@ import json
 import re
 from typing import Any, Dict, List, Optional
 
-from app.clients import GeminiClient, GoogleDriveClient, GoogleSheetsClient, WebSearchClient
+from app.clients import (
+    GeminiClient,
+    GoogleDriveClient,
+    GoogleSheetsClient,
+    WebSearchClient,
+)
 
 
 class AnalysisTools:
@@ -33,7 +38,9 @@ class AnalysisTools:
         range_: str,
     ) -> List[Dict[str, Any]]:
         """Fetch entries from the user's trading journal."""
-        return await self._sheets.fetch_trades(user_id=user_id, sheet_id=sheet_id, range_=range_)
+        return await self._sheets.fetch_trades(
+            user_id=user_id, sheet_id=sheet_id, range_=range_
+        )
 
     async def collect_assets(
         self,
@@ -50,8 +57,10 @@ class AnalysisTools:
             trade_context = {
                 "ticker": trade.get("ticker") or trade.get("Ticker"),
                 "pnl": trade.get("pnl") or trade.get("PnL"),
-                "entry_timestamp": trade.get("entry_timestamp") or trade.get("Entry Timestamp"),
-                "exit_timestamp": trade.get("exit_timestamp") or trade.get("Exit Timestamp"),
+                "entry_timestamp": trade.get("entry_timestamp")
+                or trade.get("Entry Timestamp"),
+                "exit_timestamp": trade.get("exit_timestamp")
+                or trade.get("Exit Timestamp"),
                 "notes": trade.get("notes") or trade.get("Notes"),
             }
             for link in links:
@@ -59,7 +68,9 @@ class AnalysisTools:
                 if not file_id:
                     continue
                 try:
-                    metadata = await self._drive.get_file_metadata(user_id=user_id, file_id=file_id)
+                    metadata = await self._drive.get_file_metadata(
+                        user_id=user_id, file_id=file_id
+                    )
                 except Exception:  # pragma: no cover - network defensive path
                     continue
                 assets.append(
@@ -82,12 +93,15 @@ class AnalysisTools:
         """Transcribe audio files referenced in the journal."""
         transcripts: List[Dict[str, Any]] = []
         for asset in assets:
-            raw = await self._drive.download_file_bytes(user_id=user_id, file_id=asset["file_id"])
+            raw = await self._drive.download_file_bytes(
+                user_id=user_id, file_id=asset["file_id"]
+            )
             audio_b64 = base64.b64encode(raw).decode("utf-8")
             transcript = await self._gemini.transcribe_audio(
                 prompt=(
-                    "Transcribe the trader's voice note and summarize sentiment (positive/negative/neutral). "
-                    "Return JSON with keys transcript, sentiment, highlights."
+                    "Transcribe the trader's voice note and summarize sentiment "
+                    "(positive/negative/neutral). Return JSON with keys transcript, "
+                    "sentiment, highlights."
                 ),
                 audio_base64=audio_b64,
                 mime_type=asset.get("mime_type", "audio/mp4"),
@@ -112,12 +126,15 @@ class AnalysisTools:
         """Analyze screenshots using Gemini Vision."""
         insights: List[Dict[str, Any]] = []
         for asset in assets:
-            raw = await self._drive.download_file_bytes(user_id=user_id, file_id=asset["file_id"])
+            raw = await self._drive.download_file_bytes(
+                user_id=user_id, file_id=asset["file_id"]
+            )
             image_b64 = base64.b64encode(raw).decode("utf-8")
             analysis = await self._gemini.vision_insights(
                 prompt=(
-                    "Review the trading chart. Comment on setup quality, entry timing, and risk management. "
-                    "Provide JSON with keys summary, risks, opportunities."
+                    "Review the trading chart. Comment on setup quality, entry timing, "
+                    "and risk management. Provide JSON with keys summary, risks, "
+                    "opportunities."
                 ),
                 image_base64=image_b64,
                 mime_type=asset.get("mime_type", "image/png"),
@@ -153,7 +170,8 @@ class AnalysisTools:
     ) -> Dict[str, Any]:
         """Generate a coaching report using Gemini."""
         system_prompt = (
-            "You are an elite trading performance coach. Blend quantitative trade metrics with behavioural observations."
+            "You are an elite trading performance coach. Blend quantitative trade "
+            "metrics with behavioural observations."
         )
 
         report = await self._gemini.generate_trade_analysis(
@@ -185,7 +203,11 @@ def _extract_links_from_trade(trade: Dict[str, Any]) -> List[Dict[str, Optional[
     if not raw_value:
         return []
 
-    parts = [segment.strip() for segment in re.split(r"[,;]", str(raw_value)) if segment.strip()]
+    parts = [
+        segment.strip()
+        for segment in re.split(r"[,;]", str(raw_value))
+        if segment.strip()
+    ]
     parsed: List[Dict[str, Optional[str]]] = []
     for entry in parts:
         file_id: Optional[str]

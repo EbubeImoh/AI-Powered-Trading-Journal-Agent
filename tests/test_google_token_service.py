@@ -6,6 +6,7 @@ except Exception:  # pragma: no cover - fallback for direct execution
     import _bootstrap  # type: ignore # noqa: F401
 
 from datetime import datetime, timedelta, timezone
+
 import pytest
 
 from app.core.config import GoogleSettings, OAuthSettings
@@ -76,7 +77,9 @@ async def test_get_credentials_refreshes_and_updates_storage() -> None:
 
     stored = dynamo.get_item(partition_key="user#123", sort_key="oauth#google")
     assert stored is not None
-    assert cipher.decrypt(stored["access_token_encrypted"]) == oauth_client.refreshed_token
+    assert (
+        cipher.decrypt(stored["access_token_encrypted"]) == oauth_client.refreshed_token
+    )
     assert stored.get("updated_at") is not None
 
 

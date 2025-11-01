@@ -17,14 +17,23 @@ class TradeExtractionService:
     def __init__(self, gemini_client: GeminiClient) -> None:
         self._gemini = gemini_client
 
-    async def extract(self, submission: TradeSubmissionRequest) -> TradeIngestionRequest:
+    async def extract(
+        self, submission: TradeSubmissionRequest
+    ) -> TradeIngestionRequest:
         attachment_metadata = [
             {"filename": attachment.filename, "mime_type": attachment.mime_type}
             for attachment in submission.attachments
         ]
 
         overrides: Dict[str, Any] = {}
-        for field_name in ("ticker", "pnl", "position_type", "entry_timestamp", "exit_timestamp", "notes"):
+        for field_name in (
+            "ticker",
+            "pnl",
+            "position_type",
+            "entry_timestamp",
+            "exit_timestamp",
+            "notes",
+        ):
             value = getattr(submission, field_name)
             if value is not None:
                 overrides[field_name] = value
@@ -60,7 +69,7 @@ class TradeExtractionService:
             raise HTTPException(
                 status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
                 detail=f"Unable to extract required trade fields: {exc.errors()}",
-            )
+            ) from exc
 
 
 __all__ = ["TradeExtractionService"]

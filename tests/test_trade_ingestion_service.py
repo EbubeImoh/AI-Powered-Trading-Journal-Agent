@@ -16,7 +16,9 @@ class StubDriveClient:
     def __init__(self):
         self.uploads = []
 
-    async def upload_base64_file(self, *, user_id: str, file_name: str, file_b64: str, mime_type: str, tags):
+    async def upload_base64_file(
+        self, *, user_id: str, file_name: str, file_b64: str, mime_type: str, tags
+    ):
         self.uploads.append((user_id, file_name, mime_type, tags))
         return {
             "drive_file_id": file_name,
@@ -26,7 +28,9 @@ class StubDriveClient:
 
 
 class StubSheetsClient:
-    async def append_trade_row(self, *, user_id: str, sheet_id: str, row: list, sheet_range: str | None = None) -> str:
+    async def append_trade_row(
+        self, *, user_id: str, sheet_id: str, row: list, sheet_range: str | None = None
+    ) -> str:
         return "row-42"
 
 

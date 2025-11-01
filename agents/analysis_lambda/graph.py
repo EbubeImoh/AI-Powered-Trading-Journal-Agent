@@ -4,7 +4,7 @@ LangGraph workflow definition for the analysis sub-agent.
 
 from __future__ import annotations
 
-from typing import Any, Dict
+from typing import Any
 
 from langgraph.graph import END, START, StateGraph
 
@@ -38,16 +38,22 @@ async def _collect_assets(state: AnalysisState, tools: AnalysisTools) -> Analysi
     return state
 
 
-async def _transcribe_audio(state: AnalysisState, tools: AnalysisTools) -> AnalysisState:
+async def _transcribe_audio(
+    state: AnalysisState, tools: AnalysisTools
+) -> AnalysisState:
     """Generate transcripts for audio assets."""
     job: AnalysisJobPayload = state["job"]
     assets = state.get("assets", [])
-    audio_assets = [asset for asset in assets if asset.get("mime_type", "").startswith("audio/")]
+    audio_assets = [
+        asset for asset in assets if asset.get("mime_type", "").startswith("audio/")
+    ]
     if not audio_assets:
         state["transcriptions"] = []
         return state
 
-    transcripts = await tools.transcribe_audio_assets(user_id=job["user_id"], assets=audio_assets)
+    transcripts = await tools.transcribe_audio_assets(
+        user_id=job["user_id"], assets=audio_assets
+    )
     state["transcriptions"] = transcripts
     return state
 
@@ -56,17 +62,23 @@ async def _analyze_images(state: AnalysisState, tools: AnalysisTools) -> Analysi
     """Run Gemini vision on chart screenshots."""
     job: AnalysisJobPayload = state["job"]
     assets = state.get("assets", [])
-    image_assets = [asset for asset in assets if asset.get("mime_type", "").startswith("image/")]
+    image_assets = [
+        asset for asset in assets if asset.get("mime_type", "").startswith("image/")
+    ]
     if not image_assets:
         state["image_insights"] = []
         return state
 
-    insights = await tools.analyze_trade_images(user_id=job["user_id"], assets=image_assets)
+    insights = await tools.analyze_trade_images(
+        user_id=job["user_id"], assets=image_assets
+    )
     state["image_insights"] = insights
     return state
 
 
-async def _perform_research(state: AnalysisState, tools: AnalysisTools) -> AnalysisState:
+async def _perform_research(
+    state: AnalysisState, tools: AnalysisTools
+) -> AnalysisState:
     """Gather supplemental research related to the job prompt."""
     job: AnalysisJobPayload = state["job"]
     prompt = job["prompt"]
@@ -79,7 +91,9 @@ async def _perform_research(state: AnalysisState, tools: AnalysisTools) -> Analy
     return state
 
 
-async def _synthesize_report(state: AnalysisState, tools: AnalysisTools) -> AnalysisState:
+async def _synthesize_report(
+    state: AnalysisState, tools: AnalysisTools
+) -> AnalysisState:
     """Run Gemini to synthesize a comprehensive analysis report."""
     job: AnalysisJobPayload = state["job"]
     trades = state.get("trades", [])
@@ -88,8 +102,11 @@ async def _synthesize_report(state: AnalysisState, tools: AnalysisTools) -> Anal
     web_research = state.get("external_research", [])
 
     if not trades:
-        state["report"] = (
-            "No journal entries were available for the requested window. Please ensure your sheet contains data."
+        state[
+            "report"
+        ] = (
+            "No journal entries were available for the requested window. "
+            "Please ensure your sheet contains data."
         )
         return state
 

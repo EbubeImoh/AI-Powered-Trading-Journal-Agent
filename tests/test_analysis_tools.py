@@ -3,7 +3,6 @@ try:
 except Exception:  # pragma: no cover - fallback for direct execution
     import _bootstrap  # type: ignore # noqa: F401
 
-import asyncio
 
 import pytest
 
@@ -32,15 +31,19 @@ class StubGeminiClient:
         self.audio_prompts: list[str] = []
         self.vision_prompts: list[str] = []
 
-    async def transcribe_audio(self, *, prompt: str, audio_base64: str, mime_type: str) -> str:
+    async def transcribe_audio(
+        self, *, prompt: str, audio_base64: str, mime_type: str
+    ) -> str:
         self.audio_prompts.append(prompt)
         assert audio_base64  # base64 payload provided
-        return "{\"transcript\": \"Sample\", \"sentiment\": \"positive\"}"
+        return '{"transcript": "Sample", "sentiment": "positive"}'
 
-    async def vision_insights(self, *, prompt: str, image_base64: str, mime_type: str) -> str:
+    async def vision_insights(
+        self, *, prompt: str, image_base64: str, mime_type: str
+    ) -> str:
         self.vision_prompts.append(prompt)
         assert image_base64
-        return "{\"summary\": \"Looks good\"}"
+        return '{"summary": "Looks good"}'
 
     async def generate_trade_analysis(self, **_: str) -> str:
         return "analysis"
@@ -114,14 +117,22 @@ async def test_collect_assets_and_transcribe_and_analyze() -> None:
     assets = await tools.collect_assets(user_id="user", trades=trades)
     assert len(assets) == 2
 
-    audio_assets = [asset for asset in assets if asset["mime_type"].startswith("audio/")]
-    image_assets = [asset for asset in assets if asset["mime_type"].startswith("image/")]
+    audio_assets = [
+        asset for asset in assets if asset["mime_type"].startswith("audio/")
+    ]
+    image_assets = [
+        asset for asset in assets if asset["mime_type"].startswith("image/")
+    ]
 
-    transcripts = await tools.transcribe_audio_assets(user_id="user", assets=audio_assets)
+    transcripts = await tools.transcribe_audio_assets(
+        user_id="user", assets=audio_assets
+    )
     assert transcripts and transcripts[0]["transcript"]["transcript"] == "Sample"
 
     insights = await tools.analyze_trade_images(user_id="user", assets=image_assets)
     assert insights and insights[0]["analysis"]["summary"] == "Looks good"
 
-    research = await tools.perform_web_research(query="breakout strategy best practices")
+    research = await tools.perform_web_research(
+        query="breakout strategy best practices"
+    )
     assert research and research[0]["title"] == "Result"

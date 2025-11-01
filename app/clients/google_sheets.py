@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import asyncio
-from typing import Any, Dict, List, TYPE_CHECKING
+from typing import TYPE_CHECKING, Any, Dict, List
 
 from googleapiclient.discovery import build
 
@@ -29,7 +29,9 @@ class GoogleSheetsClient:
         credentials = await self._token_service.get_credentials(user_id=user_id)
 
         def _execute_append() -> str:
-            service = build("sheets", "v4", credentials=credentials, cache_discovery=False)
+            service = build(
+                "sheets", "v4", credentials=credentials, cache_discovery=False
+            )
             result = (
                 service.spreadsheets()
                 .values()
@@ -58,7 +60,9 @@ class GoogleSheetsClient:
         credentials = await self._token_service.get_credentials(user_id=user_id)
 
         def _execute_fetch() -> List[Dict[str, Any]]:
-            service = build("sheets", "v4", credentials=credentials, cache_discovery=False)
+            service = build(
+                "sheets", "v4", credentials=credentials, cache_discovery=False
+            )
             response = (
                 service.spreadsheets()
                 .values()
