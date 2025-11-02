@@ -3,7 +3,33 @@
 This document maintains a chronological record of project changes.
 
 ## [Unreleased]
-- No changes logged.
+- Added FastAPI application scaffolding with trade ingestion and analysis job endpoints.
+- Introduced Google/AWS client wrappers and service layer stubs.
+- Implemented Google OAuth callback handling, credential persistence, and Drive/Sheets integrations.
+- Encrypted stored Google OAuth tokens using a Fernet-based cipher service shared by the API and analysis Lambda.
+- Implemented analysis Lambda package with LangGraph workflow skeleton.
+- Integrated Gemini-based report synthesis within the analysis Lambda for richer coaching output.
+- Added Google Drive binary retrieval plus Gemini-powered audio transcription and chart analysis steps in the analysis workflow.
+- Introduced optional SerpAPI web research integration feeding supplementary insights into analysis reports.
+- Added pytest coverage for token encryption and credential refresh workflows.
+- Added Makefile-based lint/test commands and unit tests covering multimodal analysis helpers.
+- Standardised Gemini prompts to emit structured JSON reports and insight payloads for downstream consumers.
+- Persisted Markdown-formatted report summaries alongside JSON for downstream presentation layers.
+- Documented operational guidance around retries, quotas, and future integration testing strategy.
+- Main agent now accepts raw multi-modal submissions, extracts structured trade fields via Gemini, and persists attachments to Drive/Sheets.
+- Added attachment validation (MIME/size) and unit tests covering extraction, ingestion, and submission workflow stubs.
+- Authored Terraform IaC templates for SQS, DynamoDB, Lambda, and EventBridge.
+- Documented architecture and setup instructions in `README.md`.
+
+## [2025-11-02] CI workflow fix: install Terraform before validate
+- Added `hashicorp/setup-terraform@v3` step to GitHub Actions CI so Terraform is available prior to running `terraform init -backend=false` and `terraform validate` in `infra/terraform`.
+
+Author: @EbubeImoh
+
+## [2025-11-01] Git ignore hygiene improvements
+- Expanded `.gitignore` to exclude environment files (`.env`), Python caches and tooling caches (`.pytest_cache/`, `.ruff_cache/`, `.mypy_cache/`), coverage artifacts (`.coverage*`, `coverage.xml`, `htmlcov/`), build outputs (`dist/`, `build/`), logs (`*.log`), additional virtual environment directories (`venv/`, `env/`), and local IDE settings (`.vscode/`, `.idea/`).
+
+Author: @EbubeImoh
 
 ## [2025-10-31] Initial repository setup
 - Initialized Git repository with `main` branch.
