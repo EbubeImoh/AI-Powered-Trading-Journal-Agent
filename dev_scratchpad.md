@@ -102,3 +102,31 @@ Impact and Risk Analysis
 - Low operational risk: Changes only affect Git tracking rules; runtime behavior is unchanged.
 - Existing tracked files like `.env` will not be removed automatically; if present in history, contributors must `git rm --cached` them explicitly.
 - Improves developer workflow by reducing accidental commits and repository bloat; no compatibility impact on tooling.
+
+---
+
+Date: 2025-11-02
+Author: @EbubeImoh
+
+Pre-Implementation Notes
+
+Observed Issue
+- GitHub Actions CI failed during Terraform validation with `terraform: command not found`, indicating Terraform was not installed in the runner environment.
+
+Proposed Modifications
+- Update `.github/workflows/ci.yml` to install Terraform before the validation step:
+  - Add a dedicated step using `hashicorp/setup-terraform@v3`.
+  - Retain `terraform init -backend=false` and `terraform validate` under `working-directory: infra/terraform`.
+
+Justification
+- Ensures Terraform is available in CI to validate infrastructure as code consistently.
+- Uses the official HashiCorp setup action, improving reliability and future compatibility.
+- Keeps validation non-invasive by disabling backend initialization in CI.
+
+Impact and Risk Analysis
+- Low operational risk: change is confined to CI workflow; runtime application behavior is unaffected.
+- If the action version changes or is deprecated, validation could fail; mitigated by pinning to `@v3` and monitoring CI results.
+- Terraform validation runs read-only checks; no state changes occur due to `-backend=false`.
+
+Outcome
+- Added the `Install Terraform` step ahead of `Terraform Validate` in CI. Subsequent runs should successfully find Terraform and complete validation.
