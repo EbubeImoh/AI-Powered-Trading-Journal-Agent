@@ -157,3 +157,31 @@ def test_telegram_webhook_completed(overrides):
     assert data["status"] == "completed"
     assert "trade" not in data
     assert ingestion.requests
+
+
+def test_telegram_webhook_connect(overrides):
+    extraction, ingestion, store = overrides
+
+    client = TestClient(app)
+    payload = {
+        "update_id": 456,
+        "message": {
+            "message_id": 2,
+            "date": 0,
+            "text": "/connect",
+            "chat": {"id": 99},
+        },
+    }
+
+    response = client.post(
+        "/api/integrations/telegram/webhook",
+        params={"token": "bot-token"},
+        json=payload,
+    )
+
+    assert response.status_code == 202
+    data = response.json()
+    assert data["status"] == "connect"
+    assert "connect your google account" in data["reply"].lower()
+    assert "user_id=99" in data["reply"]
+    assert data["chat_id"] == 99
