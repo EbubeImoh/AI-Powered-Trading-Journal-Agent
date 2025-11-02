@@ -9,7 +9,7 @@ from datetime import datetime, timedelta, timezone
 from http import HTTPStatus
 from typing import Annotated, Any
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Response
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 
 from app.clients.google_auth import OAuthTokenExchangeError, OAuthTokenNotFoundError
 from app.dependencies import (
@@ -347,46 +347,9 @@ async def get_analysis_job_status(
     return item
 
 
-def _build_follow_up_prompt(
-    missing_fields: list[str], structured: dict[str, Any]
-) -> str:
-    context_parts: list[str] = []
-    ticker = structured.get("ticker")
-    if ticker:
-        context_parts.append(f"ticker {ticker}")
-    position = structured.get("position_type")
-    if position:
-        context_parts.append(position.lower())
-    pnl = structured.get("pnl")
-    if pnl is not None:
-        context_parts.append(f"PnL {pnl}")
-
-    if context_parts:
-        context = "I have this so far: " + ", ".join(context_parts) + "."
-    else:
-        context = "Thanks for the details so far."
-
-    questions = [
-        _FIELD_PROMPTS.get(field, f"Please share {field.replace('_', ' ')}.")
-        for field in missing_fields
-    ]
-    return f"{context} {' '.join(questions)}"
-
-
-def _render_trade_summary(trade: TradeIngestionRequest) -> str:
-    entry = trade.entry_timestamp.strftime("%Y-%m-%d %H:%M")
-    exit_time = trade.exit_timestamp.strftime("%Y-%m-%d %H:%M")
-    notes = trade.notes or "No additional notes."
-    core = (
-        f"Recorded {trade.position_type} {trade.ticker} trade from {entry} to "
-        f"{exit_time} with PnL {trade.pnl}."
-    )
-    return f"{core} Notes: {notes}"
-
-
-__all__ = ["router"]
 @router.post("/integrations/telegram/webhook", status_code=HTTPStatus.ACCEPTED)
 async def telegram_webhook(
+    request: Request,
     update: TelegramUpdate,
     extraction_service: Annotated[Any, Depends(get_trade_extraction_service)],
     ingestion_service: Annotated[Any, Depends(get_trade_ingestion_service)],
@@ -403,10 +366,28 @@ async def telegram_webhook(
 
     chat_id = message.chat.get("id")
     user_id = str(chat_id)
+    text = message.text.strip()
 
     expected_token = getattr(settings, "telegram_bot_token", None)
     if expected_token and token != expected_token:
         raise HTTPException(status_code=HTTPStatus.FORBIDDEN, detail="Invalid token")
+
+    if text.lower().startswith("/connect"):
+        base_url = settings.telegram_connect_base_url
+        if base_url:
+            authorize_base = f"{str(base_url).rstrip('/')}/api/auth/google/authorize"
+        else:
+            authorize_base = str(request.url_for("start_google_oauth_flow"))
+        connect_url = f"{authorize_base}?user_id={user_id}"
+        reply_text = (
+            "Tap to connect your Google account:\n"
+            f"{connect_url}"
+        )
+        return {
+            "status": "connect",
+            "reply": reply_text,
+            "chat_id": chat_id,
+        }
 
     sheet_id = getattr(settings, "telegram_default_sheet_id", None)
     if not sheet_id:
@@ -446,3 +427,43 @@ async def telegram_webhook(
     }
 
     return reply
+
+
+def _build_follow_up_prompt(
+    missing_fields: list[str], structured: dict[str, Any]
+) -> str:
+    context_parts: list[str] = []
+    ticker = structured.get("ticker")
+    if ticker:
+        context_parts.append(f"ticker {ticker}")
+    position = structured.get("position_type")
+    if position:
+        context_parts.append(position.lower())
+    pnl = structured.get("pnl")
+    if pnl is not None:
+        context_parts.append(f"PnL {pnl}")
+
+    if context_parts:
+        context = "I have this so far: " + ", ".join(context_parts) + "."
+    else:
+        context = "Thanks for the details so far."
+
+    questions = [
+        _FIELD_PROMPTS.get(field, f"Please share {field.replace('_', ' ')}.")
+        for field in missing_fields
+    ]
+    return f"{context} {' '.join(questions)}"
+
+
+def _render_trade_summary(trade: TradeIngestionRequest) -> str:
+    entry = trade.entry_timestamp.strftime("%Y-%m-%d %H:%M")
+    exit_time = trade.exit_timestamp.strftime("%Y-%m-%d %H:%M")
+    notes = trade.notes or "No additional notes."
+    core = (
+        f"Recorded {trade.position_type} {trade.ticker} trade from {entry} to "
+        f"{exit_time} with PnL {trade.pnl}."
+    )
+    return f"{core} Notes: {notes}"
+
+
+__all__ = ["router"]

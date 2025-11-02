@@ -147,6 +147,13 @@ class AppSettings(BaseSettings):
         env="TELEGRAM_DEFAULT_SHEET_ID",
         description="Default Google Sheet ID used for Telegram submissions.",
     )
+    telegram_connect_base_url: Optional[HttpUrl] = Field(
+        None,
+        env="TELEGRAM_CONNECT_BASE_URL",
+        description=(
+            "Optional base URL used to generate Google OAuth links for Telegram users."
+        ),
+    )
     trade_capture_db_path: str = Field(
         "data/trade_capture.db",
         env="TRADE_CAPTURE_DB_PATH",
