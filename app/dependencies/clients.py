@@ -5,13 +5,13 @@ Factory functions to provide shared clients and services as FastAPI dependencies
 from functools import lru_cache
 
 from app.clients import (
-    DynamoDBClient,
     GeminiClient,
     GoogleDriveClient,
     GoogleOAuthClient,
     GoogleSheetsClient,
     OAuthStateEncoder,
-    SQSClient,
+    SQLiteQueueClient,
+    SQLiteStore,
     WebSearchClient,
 )
 from app.core.config import get_settings
@@ -19,6 +19,7 @@ from app.services import (
     AnalysisQueueService,
     GoogleTokenService,
     TokenCipherService,
+    TradeCaptureStore,
     TradeExtractionService,
     TradeIngestionService,
 )
@@ -61,17 +62,18 @@ def get_sheets_client() -> GoogleSheetsClient:
 
 
 @lru_cache()
-def get_sqs_client() -> SQSClient:
-    """Provide SQS client for queueing analysis jobs."""
+@lru_cache()
+def get_sqlite_store() -> SQLiteStore:
+    """Provide shared SQLite record store."""
     settings = _settings()
-    return SQSClient(settings.aws)
+    return SQLiteStore(settings.trade_capture_db_path)
 
 
 @lru_cache()
-def get_dynamodb_client() -> DynamoDBClient:
-    """Provide DynamoDB client for persistence."""
+def get_queue_client() -> SQLiteQueueClient:
+    """Provide SQLite-backed queue client."""
     settings = _settings()
-    return DynamoDBClient(settings.aws)
+    return SQLiteQueueClient(settings.trade_capture_db_path)
 
 
 @lru_cache()
@@ -79,7 +81,7 @@ def get_google_token_service() -> GoogleTokenService:
     """Provide helper for managing Google OAuth tokens."""
     settings = _settings()
     return GoogleTokenService(
-        dynamodb_client=get_dynamodb_client(),
+        store=get_sqlite_store(),
         oauth_client=get_google_oauth_client(),
         google_settings=settings.google,
         oauth_settings=settings.oauth,
@@ -128,14 +130,22 @@ def get_trade_ingestion_service() -> TradeIngestionService:
 def get_analysis_queue_service() -> AnalysisQueueService:
     """Build an analysis queue service."""
     return AnalysisQueueService(
-        sqs_client=get_sqs_client(),
-        dynamodb_client=get_dynamodb_client(),
+        queue_client=get_queue_client(),
+        store=get_sqlite_store(),
+    )
+
+
+@lru_cache()
+def get_trade_capture_store() -> TradeCaptureStore:
+    """Provide a process-local trade capture store."""
+    settings = _settings()
+    return TradeCaptureStore(
+        db_path=settings.trade_capture_db_path,
     )
 
 
 __all__ = [
     "get_analysis_queue_service",
-    "get_dynamodb_client",
     "get_drive_client",
     "get_gemini_client",
     "get_google_oauth_client",
@@ -146,4 +156,7 @@ __all__ = [
     "get_sheets_client",
     "get_trade_extraction_service",
     "get_trade_ingestion_service",
+    "get_trade_capture_store",
+    "get_sqlite_store",
+    "get_queue_client",
 ]

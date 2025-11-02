@@ -6,7 +6,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from langgraph.graph import END, START, StateGraph
+from langgraph.graph.state import END, START, StateGraph
 
 from agents.analysis_lambda.models import AnalysisJobPayload, AnalysisState
 from agents.analysis_lambda.tools import AnalysisTools

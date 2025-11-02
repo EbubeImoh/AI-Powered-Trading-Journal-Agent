@@ -14,11 +14,11 @@ from agents.analysis_lambda.graph import create_analysis_graph
 from agents.analysis_lambda.models import AnalysisJobPayload
 from agents.analysis_lambda.tools import AnalysisTools
 from app.clients import (
-    DynamoDBClient,
     GeminiClient,
     GoogleDriveClient,
     GoogleOAuthClient,
     GoogleSheetsClient,
+    SQLiteStore,
     WebSearchClient,
 )
 from app.clients.google_auth import OAuthTokenNotFoundError
@@ -34,14 +34,14 @@ def _bootstrap() -> Dict[str, Any]:
     settings = get_settings()
     configure_logging(settings.log_level)
 
-    dynamodb = DynamoDBClient(settings.aws)
+    store = SQLiteStore(settings.trade_capture_db_path)
     oauth_client = GoogleOAuthClient(settings.google, settings.oauth)
     token_cipher = TokenCipherService(
         secret=settings.security.token_encryption_secret
         or settings.google.client_secret
     )
     token_service = GoogleTokenService(
-        dynamodb_client=dynamodb,
+        store=store,
         oauth_client=oauth_client,
         google_settings=settings.google,
         oauth_settings=settings.oauth,
@@ -64,16 +64,21 @@ def _bootstrap() -> Dict[str, Any]:
         web_search_client=web_search_client,
     )
     graph = create_analysis_graph(tools)
-    return {"graph": graph, "dynamodb": dynamodb}
+    return {"graph": graph, "store": store}
 
 
 BOOTSTRAP = _bootstrap()
 
 
+async def process_job(payload: AnalysisJobPayload) -> None:
+    """Public entry point to process a single job payload."""
+    await _process_job(payload)
+
+
 async def _process_job(payload: AnalysisJobPayload) -> None:
     """Execute the LangGraph workflow for an individual job."""
     graph = BOOTSTRAP["graph"]
-    dynamodb: DynamoDBClient = BOOTSTRAP["dynamodb"]
+    store: SQLiteStore = BOOTSTRAP["store"]
 
     logger.info("Starting analysis job", extra={"job_id": payload["job_id"]})
     try:
@@ -83,7 +88,7 @@ async def _process_job(payload: AnalysisJobPayload) -> None:
             "Missing OAuth tokens for analysis job", extra={"job_id": payload["job_id"]}
         )
         _persist_job_record(
-            dynamodb=dynamodb,
+            store=store,
             payload=payload,
             status="failed",
             error=str(exc),
@@ -95,7 +100,7 @@ async def _process_job(payload: AnalysisJobPayload) -> None:
             extra={"job_id": payload["job_id"]},
         )
         _persist_job_record(
-            dynamodb=dynamodb,
+            store=store,
             payload=payload,
             status="failed",
             error=str(exc),
@@ -109,7 +114,7 @@ async def _process_job(payload: AnalysisJobPayload) -> None:
     image_insights = final_state.get("image_insights")
     external_research = final_state.get("external_research")
     _persist_job_record(
-        dynamodb=dynamodb,
+        store=store,
         payload=payload,
         status="completed",
         report=report_json,
@@ -123,7 +128,7 @@ async def _process_job(payload: AnalysisJobPayload) -> None:
 
 def _persist_job_record(
     *,
-    dynamodb: DynamoDBClient,
+    store: SQLiteStore,
     payload: AnalysisJobPayload,
     status: str,
     report: str | None = None,
@@ -167,7 +172,7 @@ def _persist_job_record(
     if payload.get("requested_at"):
         record["requested_at"] = payload["requested_at"]
 
-    dynamodb.put_item(record)
+    store.put_item(record)
 
 
 def _render_markdown(report: dict[str, Any]) -> str:
@@ -237,4 +242,4 @@ def lambda_handler(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
     return {"statusCode": 200, "processed": len(payloads)}
 
 
-__all__ = ["lambda_handler"]
+__all__ = ["lambda_handler", "process_job"]

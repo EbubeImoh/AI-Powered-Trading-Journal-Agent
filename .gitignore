@@ -27,6 +27,9 @@ htmlcov/
 .env
 .python-version
 
+# Local data stores
+data/*.db
+
 # Virtual environment
 .venv/
 venv/

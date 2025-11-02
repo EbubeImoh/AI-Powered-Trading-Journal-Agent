@@ -5,11 +5,10 @@ Centralizes settings management so both the FastAPI app and the asynchronous
 analysis agent can share a consistent configuration surface.
 """
 
+import os
 from functools import lru_cache
 from pathlib import Path
 from typing import Optional
-
-import os
 
 from pydantic import AnyHttpUrl, BaseSettings, Field, HttpUrl, validator
 
@@ -137,6 +136,23 @@ class AppSettings(BaseSettings):
         None,
         env="SERPAPI_API_KEY",
         description="Optional SerpAPI key used for web research integration.",
+    )
+    telegram_bot_token: Optional[str] = Field(
+        None,
+        env="TELEGRAM_BOT_TOKEN",
+        description="Telegram bot token used for webhook authentication.",
+    )
+    telegram_default_sheet_id: Optional[str] = Field(
+        None,
+        env="TELEGRAM_DEFAULT_SHEET_ID",
+        description="Default Google Sheet ID used for Telegram submissions.",
+    )
+    trade_capture_db_path: str = Field(
+        "data/trade_capture.db",
+        env="TRADE_CAPTURE_DB_PATH",
+        description=(
+            "SQLite database path used for conversational trade capture sessions."
+        ),
     )
 
     class Config:

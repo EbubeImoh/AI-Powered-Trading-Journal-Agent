@@ -3,7 +3,7 @@ Pydantic models for trade ingestion and analysis requests.
 """
 
 from datetime import datetime
-from typing import Optional
+from typing import Any, Dict, Literal, Optional
 
 from pydantic import BaseModel, Field, HttpUrl
 
@@ -74,6 +74,10 @@ class TradeSubmissionRequest(BaseModel):
     user_id: str = Field(
         ..., description="Application-level identifier for the trader."
     )
+    session_id: Optional[str] = Field(
+        None,
+        description="Optional identifier for an in-progress trade capture session.",
+    )
     content: str = Field(
         ..., description="Free-form narrative of the trade, strategy, and outcomes."
     )
@@ -95,6 +99,57 @@ class TradeSubmissionRequest(BaseModel):
         None, description="Optional exit timestamp override."
     )
     notes: Optional[str] = Field(None, description="Optional additional notes.")
+
+
+class TradeSubmissionResult(BaseModel):
+    """Response envelope for conversational trade submission workflow."""
+
+    status: Literal["needs_more_info", "completed"] = Field(
+        ...,
+        description="Represents whether additional user input is required.",
+    )
+    session_id: Optional[str] = Field(
+        None,
+        description="Identifies the conversation session when more input is needed.",
+    )
+    missing_fields: list[str] = Field(
+        default_factory=list, description="Fields still required to log the trade."
+    )
+    prompt: Optional[str] = Field(
+        None, description="Natural language follow-up presented to the user."
+    )
+    summary: Optional[str] = Field(
+        None,
+        description="Structured summary of the trade when capture is complete.",
+    )
+    trade: Optional[TradeIngestionRequest] = Field(
+        None,
+        description="Structured trade derived from the conversation.",
+    )
+    ingestion_response: Optional[TradeIngestionResponse] = Field(
+        None,
+        description="Result of persisting the trade when completed.",
+    )
+
+
+class TelegramUpdate(BaseModel):
+    """Minimal Telegram update payload we care about."""
+
+    update_id: int
+    message: Optional["TelegramMessage"] = None
+
+
+class TelegramMessage(BaseModel):
+    """Subset of Telegram message fields used in trade capture."""
+
+    message_id: int
+    date: int
+    text: Optional[str] = None
+    chat: Dict[str, Any]
+    from_: Optional[Dict[str, Any]] = Field(None, alias="from")
+
+
+TelegramUpdate.update_forward_refs()
 
 
 class AnalysisRequest(BaseModel):
@@ -134,4 +189,6 @@ __all__ = [
     "TradeFileLink",
     "TradeIngestionRequest",
     "TradeIngestionResponse",
+    "TradeSubmissionRequest",
+    "TradeSubmissionResult",
 ]

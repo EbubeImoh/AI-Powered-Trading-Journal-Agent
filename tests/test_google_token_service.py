@@ -14,7 +14,7 @@ from app.services.google_tokens import GoogleTokenService
 from app.services.token_cipher import TokenCipherService
 
 
-class FakeDynamoDBClient:
+class FakeStore:
     def __init__(self) -> None:
         self._storage: dict[tuple[str, str], dict] = {}
 
@@ -39,7 +39,7 @@ class DummyOAuthClient:
 
 @pytest.mark.asyncio
 async def test_get_credentials_refreshes_and_updates_storage() -> None:
-    dynamo = FakeDynamoDBClient()
+    dynamo = FakeStore()
     cipher = TokenCipherService(secret="secret-key")
     oauth_client = DummyOAuthClient()
 
@@ -63,7 +63,7 @@ async def test_get_credentials_refreshes_and_updates_storage() -> None:
     )
 
     service = GoogleTokenService(
-        dynamodb_client=dynamo,
+        store=dynamo,
         oauth_client=oauth_client,
         google_settings=settings,
         oauth_settings=oauth_settings,
@@ -85,7 +85,7 @@ async def test_get_credentials_refreshes_and_updates_storage() -> None:
 
 @pytest.mark.asyncio
 async def test_get_credentials_migrates_plaintext_tokens() -> None:
-    dynamo = FakeDynamoDBClient()
+    dynamo = FakeStore()
     cipher = TokenCipherService(secret="secret-key")
     oauth_client = DummyOAuthClient()
 
@@ -109,7 +109,7 @@ async def test_get_credentials_migrates_plaintext_tokens() -> None:
     )
 
     service = GoogleTokenService(
-        dynamodb_client=dynamo,
+        store=dynamo,
         oauth_client=oauth_client,
         google_settings=settings,
         oauth_settings=oauth_settings,

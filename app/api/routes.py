@@ -9,29 +9,41 @@ from datetime import datetime, timedelta, timezone
 from http import HTTPStatus
 from typing import Annotated, Any
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Response
 
 from app.clients.google_auth import OAuthTokenExchangeError, OAuthTokenNotFoundError
 from app.dependencies import (
     get_analysis_queue_service,
     get_app_settings,
-    get_dynamodb_client,
     get_google_oauth_client,
     get_google_token_service,
     get_oauth_state_encoder,
+    get_sqlite_store,
     get_token_cipher_service,
+    get_trade_capture_store,
     get_trade_extraction_service,
     get_trade_ingestion_service,
 )
 from app.schemas import (
     AnalysisRequest,
     OAuthCallbackPayload,
+    TelegramUpdate,
     TradeIngestionRequest,
     TradeIngestionResponse,
     TradeSubmissionRequest,
+    TradeSubmissionResult,
 )
 
 router = APIRouter()
+
+
+_FIELD_PROMPTS = {
+    "ticker": "Which ticker were you trading?",
+    "pnl": "What was the profit or loss on the trade?",
+    "position_type": "Was it a long, short, or another position type?",
+    "entry_timestamp": "When did you enter the position?",
+    "exit_timestamp": "When did you exit the position?",
+}
 
 
 @router.get("/health", status_code=HTTPStatus.OK)
@@ -70,7 +82,7 @@ async def handle_google_oauth_callback(
     payload: OAuthCallbackPayload,
     oauth_client: Annotated[Any, Depends(get_google_oauth_client)],
     state_encoder: Annotated[Any, Depends(get_oauth_state_encoder)],
-    dynamodb_client: Annotated[Any, Depends(get_dynamodb_client)],
+    record_store: Annotated[Any, Depends(get_sqlite_store)],
     settings: Annotated[Any, Depends(get_app_settings)],
     token_cipher: Annotated[Any, Depends(get_token_cipher_service)],
 ) -> dict:
@@ -132,7 +144,7 @@ async def handle_google_oauth_callback(
         "created_at": now.isoformat(),
         "updated_at": now.isoformat(),
     }
-    dynamodb_client.put_item(token_record)
+    record_store.put_item(token_record)
 
     return {
         "status": "connected",
@@ -147,6 +159,7 @@ async def ingest_trade(
     payload: TradeIngestionRequest,
     service: Annotated[Any, Depends(get_trade_ingestion_service)],
     token_service: Annotated[Any, Depends(get_google_token_service)],
+    capture_store: Annotated[Any, Depends(get_trade_capture_store)],
     sheet_id: str = Query(
         ..., description="Google Sheet identifier for the trading journal."
     ),
@@ -173,14 +186,15 @@ async def ingest_trade(
 
 @router.post(
     "/trades/submit",
-    response_model=TradeIngestionResponse,
-    status_code=HTTPStatus.CREATED,
+    response_model=TradeSubmissionResult,
 )
 async def submit_trade(
     payload: TradeSubmissionRequest,
+    response: Response,
     extraction_service: Annotated[Any, Depends(get_trade_extraction_service)],
     ingestion_service: Annotated[Any, Depends(get_trade_ingestion_service)],
     token_service: Annotated[Any, Depends(get_google_token_service)],
+    capture_store: Annotated[Any, Depends(get_trade_capture_store)],
     sheet_id: str = Query(
         ..., description="Google Sheet identifier for the trading journal."
     ),
@@ -200,12 +214,100 @@ async def submit_trade(
             detail="Google account not connected.",
         ) from exc
 
-    structured_request = await extraction_service.extract(payload)
-    return await ingestion_service.ingest_trade(
-        request=structured_request,
+    session = None
+    if payload.session_id:
+        session = capture_store.get(payload.session_id)
+
+    history_content = payload.content
+    aggregated_attachments = list(payload.attachments)
+
+    structured_defaults = session.structured if session else {}
+    if session:
+        history_lines = [*session.conversation, payload.content]
+        history_content = "\n".join(filter(None, history_lines))
+        aggregated_attachments = [*session.attachments, *payload.attachments]
+
+    # Build a composite submission that includes prior structured overrides.
+    ticker = payload.ticker or structured_defaults.get("ticker")
+    pnl = payload.pnl or structured_defaults.get("pnl")
+    position_type = payload.position_type or structured_defaults.get("position_type")
+    entry_ts = payload.entry_timestamp or structured_defaults.get("entry_timestamp")
+    exit_ts = payload.exit_timestamp or structured_defaults.get("exit_timestamp")
+    notes = payload.notes or structured_defaults.get("notes")
+
+    combined_submission = TradeSubmissionRequest(
+        user_id=payload.user_id,
+        session_id=payload.session_id,
+        content=history_content,
+        attachments=aggregated_attachments,
+        ticker=ticker,
+        pnl=pnl,
+        position_type=position_type,
+        entry_timestamp=entry_ts,
+        exit_timestamp=exit_ts,
+        notes=notes,
+    )
+
+    extraction = await extraction_service.extract(combined_submission)
+
+    if extraction.missing_fields:
+        if session:
+            updated_session = capture_store.update(
+                session.session_id,
+                message=payload.content,
+                structured=extraction.structured,
+                missing_fields=extraction.missing_fields,
+                attachments=payload.attachments,
+                trade=extraction.trade,
+            )
+            session_id = (
+                updated_session.session_id
+                if updated_session
+                else session.session_id
+            )
+        else:
+            session_obj = capture_store.create(
+                user_id=payload.user_id,
+                initial_message=payload.content,
+                structured=extraction.structured,
+                missing_fields=extraction.missing_fields,
+                attachments=payload.attachments,
+                trade=extraction.trade,
+            )
+            session_id = session_obj.session_id
+
+        follow_up = _build_follow_up_prompt(
+            extraction.missing_fields,
+            extraction.structured,
+        )
+
+        response.status_code = HTTPStatus.ACCEPTED
+        return TradeSubmissionResult(
+            status="needs_more_info",
+            session_id=session_id,
+            missing_fields=extraction.missing_fields,
+            prompt=follow_up,
+            trade=extraction.trade,
+        )
+
+    # We have a fully structured trade; record it and close the session.
+    ingestion_response = await ingestion_service.ingest_trade(
+        request=extraction.trade,
         sheet_id=sheet_id,
         sheet_range=sheet_range,
-        attachments=payload.attachments,
+        attachments=aggregated_attachments,
+    )
+
+    if session:
+        capture_store.delete(session.session_id)
+
+    response.status_code = HTTPStatus.CREATED
+    return TradeSubmissionResult(
+        status="completed",
+        session_id=session.session_id if session else None,
+        trade=extraction.trade,
+        ingestion_response=ingestion_response,
+        summary=_render_trade_summary(extraction.trade),
     )
 
 
@@ -231,13 +333,13 @@ async def request_analysis_job(
 @router.get("/analysis/jobs/{job_id}", status_code=HTTPStatus.OK)
 async def get_analysis_job_status(
     job_id: str,
-    dynamodb_client: Annotated[Any, Depends(get_dynamodb_client)],
+    record_store: Annotated[Any, Depends(get_sqlite_store)],
     user_id: str = Query(
         ..., description="User identifier associated with the job."
     ),
 ) -> dict:
     """Fetch the status of an analysis job from DynamoDB."""
-    item = dynamodb_client.get_item(
+    item = record_store.get_item(
         partition_key=f"user#{user_id}", sort_key=f"analysis#{job_id}"
     )
     if not item:
@@ -245,4 +347,102 @@ async def get_analysis_job_status(
     return item
 
 
+def _build_follow_up_prompt(
+    missing_fields: list[str], structured: dict[str, Any]
+) -> str:
+    context_parts: list[str] = []
+    ticker = structured.get("ticker")
+    if ticker:
+        context_parts.append(f"ticker {ticker}")
+    position = structured.get("position_type")
+    if position:
+        context_parts.append(position.lower())
+    pnl = structured.get("pnl")
+    if pnl is not None:
+        context_parts.append(f"PnL {pnl}")
+
+    if context_parts:
+        context = "I have this so far: " + ", ".join(context_parts) + "."
+    else:
+        context = "Thanks for the details so far."
+
+    questions = [
+        _FIELD_PROMPTS.get(field, f"Please share {field.replace('_', ' ')}.")
+        for field in missing_fields
+    ]
+    return f"{context} {' '.join(questions)}"
+
+
+def _render_trade_summary(trade: TradeIngestionRequest) -> str:
+    entry = trade.entry_timestamp.strftime("%Y-%m-%d %H:%M")
+    exit_time = trade.exit_timestamp.strftime("%Y-%m-%d %H:%M")
+    notes = trade.notes or "No additional notes."
+    core = (
+        f"Recorded {trade.position_type} {trade.ticker} trade from {entry} to "
+        f"{exit_time} with PnL {trade.pnl}."
+    )
+    return f"{core} Notes: {notes}"
+
+
 __all__ = ["router"]
+@router.post("/integrations/telegram/webhook", status_code=HTTPStatus.ACCEPTED)
+async def telegram_webhook(
+    update: TelegramUpdate,
+    extraction_service: Annotated[Any, Depends(get_trade_extraction_service)],
+    ingestion_service: Annotated[Any, Depends(get_trade_ingestion_service)],
+    token_service: Annotated[Any, Depends(get_google_token_service)],
+    capture_store: Annotated[Any, Depends(get_trade_capture_store)],
+    settings: Annotated[Any, Depends(get_app_settings)],
+    token: str | None = Query(None, description="Bot token for verification."),
+) -> dict:
+    """Handle incoming Telegram messages and drive trade capture."""
+
+    message = update.message
+    if not message or not message.text:
+        return {"status": "ignored"}
+
+    chat_id = message.chat.get("id")
+    user_id = str(chat_id)
+
+    expected_token = getattr(settings, "telegram_bot_token", None)
+    if expected_token and token != expected_token:
+        raise HTTPException(status_code=HTTPStatus.FORBIDDEN, detail="Invalid token")
+
+    sheet_id = getattr(settings, "telegram_default_sheet_id", None)
+    if not sheet_id:
+        raise HTTPException(
+            status_code=HTTPStatus.INTERNAL_SERVER_ERROR,
+            detail="Telegram sheet configuration missing.",
+        )
+
+    active_session = capture_store.get_active_for_user(user_id)
+    session_id = active_session.session_id if active_session else None
+
+    submission = TradeSubmissionRequest(
+        user_id=user_id,
+        content=message.text,
+        session_id=session_id,
+    )
+
+    # TODO: lookup sheet configuration per Telegram chat / user mapping.
+    result = await submit_trade(
+        payload=submission,
+        response=Response(),
+        extraction_service=extraction_service,
+        ingestion_service=ingestion_service,
+        token_service=token_service,
+        capture_store=capture_store,
+        sheet_id=sheet_id,
+    )
+
+    reply_text = result.prompt if result.status == "needs_more_info" else result.summary
+
+    reply: dict[str, Any] = {
+        "status": result.status,
+        "session_id": result.session_id,
+        "missing": result.missing_fields,
+        "reply": reply_text or "",
+        "chat_id": chat_id,
+    }
+
+    return reply

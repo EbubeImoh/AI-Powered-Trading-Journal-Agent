@@ -7,16 +7,17 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Any, Dict
 
-from app.clients import DynamoDBClient, SQSClient
+from app.clients import SQLiteQueueClient
+from app.clients.sqlite_store import SQLiteStore
 from app.schemas import AnalysisRequest
 
 
 class AnalysisQueueService:
     """Queue asynchronous analysis jobs and track their lifecycle."""
 
-    def __init__(self, sqs_client: SQSClient, dynamodb_client: DynamoDBClient) -> None:
-        self._sqs = sqs_client
-        self._ddb = dynamodb_client
+    def __init__(self, queue_client: SQLiteQueueClient, store: SQLiteStore) -> None:
+        self._queue = queue_client
+        self._store = store
 
     def enqueue_analysis(self, *, request: AnalysisRequest) -> str:
         """Create a job record and enqueue the task."""
@@ -40,9 +41,9 @@ class AnalysisQueueService:
         if request.end_date:
             item["end_date"] = request.end_date.isoformat()
 
-        self._ddb.put_item(item)
+        self._store.put_item(item)
 
-        self._sqs.enqueue_analysis_request(payload)
+        self._queue.enqueue_analysis_request(payload)
         return job_id
 
     @staticmethod

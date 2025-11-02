@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from typing import Any, Dict, List
+from dataclasses import dataclass
+from typing import Any, Dict, List, Optional
 
 from fastapi import HTTPException, status
 from pydantic import ValidationError
@@ -11,15 +12,22 @@ from app.clients import GeminiClient
 from app.schemas import TradeIngestionRequest, TradeSubmissionRequest
 
 
+@dataclass(slots=True)
+class ExtractionResult:
+    """Outcome of attempting to structure a raw trade submission."""
+
+    trade: Optional[TradeIngestionRequest]
+    structured: Dict[str, Any]
+    missing_fields: List[str]
+
+
 class TradeExtractionService:
     """Convert unstructured trade submissions into structured sheet entries."""
 
     def __init__(self, gemini_client: GeminiClient) -> None:
         self._gemini = gemini_client
 
-    async def extract(
-        self, submission: TradeSubmissionRequest
-    ) -> TradeIngestionRequest:
+    async def extract(self, submission: TradeSubmissionRequest) -> ExtractionResult:
         attachment_metadata = [
             {"filename": attachment.filename, "mime_type": attachment.mime_type}
             for attachment in submission.attachments
@@ -58,18 +66,25 @@ class TradeExtractionService:
         ]
         missing = [field for field in required_fields if not structured.get(field)]
         if missing:
-            raise HTTPException(
-                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-                detail=f"Gemini was unable to determine fields: {', '.join(missing)}",
+            return ExtractionResult(
+                trade=None,
+                structured=structured,
+                missing_fields=missing,
             )
 
         try:
-            return TradeIngestionRequest(**structured)
+            request = TradeIngestionRequest(**structured)
         except ValidationError as exc:  # pragma: no cover - defensive
             raise HTTPException(
                 status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
                 detail=f"Unable to extract required trade fields: {exc.errors()}",
             ) from exc
 
+        return ExtractionResult(
+            trade=request,
+            structured=structured,
+            missing_fields=[],
+        )
 
-__all__ = ["TradeExtractionService"]
+
+__all__ = ["ExtractionResult", "TradeExtractionService"]

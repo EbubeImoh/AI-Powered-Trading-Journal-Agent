@@ -8,8 +8,9 @@ from datetime import datetime, timedelta, timezone
 
 from google.oauth2.credentials import Credentials
 
-from app.clients import DynamoDBClient, GoogleOAuthClient
+from app.clients import GoogleOAuthClient
 from app.clients.google_auth import OAuthTokenNotFoundError
+from app.clients.sqlite_store import SQLiteStore
 from app.core.config import GoogleSettings, OAuthSettings
 from app.services.token_cipher import TokenCipherService
 
@@ -21,13 +22,13 @@ class GoogleTokenService:
 
     def __init__(
         self,
-        dynamodb_client: DynamoDBClient,
+        store: SQLiteStore,
         oauth_client: GoogleOAuthClient,
         google_settings: GoogleSettings,
         oauth_settings: OAuthSettings,
         token_cipher: TokenCipherService,
     ) -> None:
-        self._ddb = dynamodb_client
+        self._store = store
         self._oauth = oauth_client
         self._google = google_settings
         self._oauth_settings = oauth_settings
@@ -35,7 +36,7 @@ class GoogleTokenService:
 
     async def get_credentials(self, *, user_id: str) -> Credentials:
         """Retrieve credentials for a user, refreshing tokens when necessary."""
-        record = self._ddb.get_item(
+        record = self._store.get_item(
             partition_key=f"user#{user_id}",
             sort_key="oauth#google",
         )
@@ -66,7 +67,7 @@ class GoogleTokenService:
             )
         if update_required:
             record["updated_at"] = datetime.now(timezone.utc).isoformat()
-            self._ddb.put_item(record)
+            self._store.put_item(record)
 
         if not encrypted_access_token or not encrypted_refresh_token or not expires_at:
             raise OAuthTokenNotFoundError(
@@ -88,7 +89,7 @@ class GoogleTokenService:
             record["access_token_encrypted"] = self._cipher.encrypt(access_token)
             record["expires_at"] = expires_at_dt.isoformat()
             record["updated_at"] = refreshed_at.isoformat()
-            self._ddb.put_item(record)
+            self._store.put_item(record)
 
         credentials = Credentials(
             token=access_token,

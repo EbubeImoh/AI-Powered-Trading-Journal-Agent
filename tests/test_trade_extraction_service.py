@@ -4,10 +4,9 @@ except Exception:  # pragma: no cover - fallback for direct execution
     import _bootstrap  # type: ignore # noqa: F401
 
 import pytest
-from fastapi import HTTPException
 
 from app.schemas import TradeAttachment, TradeSubmissionRequest
-from app.services.trade_extraction import TradeExtractionService
+from app.services.trade_extraction import ExtractionResult, TradeExtractionService
 
 
 class StubGemini:
@@ -44,11 +43,14 @@ async def test_trade_extraction_service_success():
         pnl=300.0,
     )
 
-    request = await service.extract(submission)
+    result = await service.extract(submission)
 
-    assert request.ticker == "AAPL"
-    assert request.pnl == 300.0  # override applied
-    assert request.notes == "Auto-notes"
+    assert isinstance(result, ExtractionResult)
+    assert result.trade is not None
+    assert result.trade.ticker == "AAPL"
+    assert result.trade.pnl == 300.0  # override applied
+    assert result.trade.notes == "Auto-notes"
+    assert result.missing_fields == []
 
 
 @pytest.mark.asyncio
@@ -59,7 +61,12 @@ async def test_trade_extraction_service_missing_fields_raises():
         content="Missing timestamps",
     )
 
-    with pytest.raises(HTTPException) as exc:
-        await service.extract(submission)
+    result = await service.extract(submission)
 
-    assert exc.value.status_code == 422
+    assert result.trade is None
+    assert result.missing_fields == [
+        "pnl",
+        "position_type",
+        "entry_timestamp",
+        "exit_timestamp",
+    ]
