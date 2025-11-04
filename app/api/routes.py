@@ -4,13 +4,14 @@ FastAPI routes for the trading journal agent.
 
 from __future__ import annotations
 
+import json
 import uuid
 from datetime import datetime, timedelta, timezone
 from http import HTTPStatus
 from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
-from fastapi.responses import RedirectResponse
+from fastapi.responses import JSONResponse, RedirectResponse
 
 from app.clients.google_auth import OAuthTokenExchangeError, OAuthTokenNotFoundError
 from app.dependencies import (
@@ -162,6 +163,41 @@ async def handle_google_oauth_callback(
         "status": "connected",
         "redirect_to": state_data.get("redirect_to"),
     }
+
+
+@router.get("/auth/google/callback", status_code=HTTPStatus.OK)
+async def handle_google_oauth_callback_get(
+    request: Request,
+    oauth_client: Annotated[Any, Depends(get_google_oauth_client)],
+    state_encoder: Annotated[Any, Depends(get_oauth_state_encoder)],
+    record_store: Annotated[Any, Depends(get_sqlite_store)],
+    settings: Annotated[Any, Depends(get_app_settings)],
+    token_cipher: Annotated[Any, Depends(get_token_cipher_service)],
+    state: str = Query(..., description="OAuth state token."),
+    code: str = Query(..., description="Authorization code returned by Google."),
+    redirect: bool = Query(
+        default=False,
+        description="When true, redirect browser clients instead of returning JSON.",
+    ),
+) -> Response:
+    payload = OAuthCallbackPayload(state=state, code=code)
+    result = await handle_google_oauth_callback(
+        payload=payload,
+        oauth_client=oauth_client,
+        state_encoder=state_encoder,
+        record_store=record_store,
+        settings=settings,
+        token_cipher=token_cipher,
+    )
+
+    accept_header = request.headers.get("accept", "")
+    wants_html = "text/html" in accept_header.lower()
+    redirect_target = result.get("redirect_to") or settings.frontend_base_url
+
+    if redirect_target and (redirect or wants_html):
+        return RedirectResponse(url=str(redirect_target), status_code=HTTPStatus.TEMPORARY_REDIRECT)
+
+    return JSONResponse(content=result)
 
 
 @router.post(
