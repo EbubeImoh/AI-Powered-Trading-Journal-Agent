@@ -347,7 +347,7 @@ async def get_analysis_job_status(
     return item
 
 
-@router.post("/integrations/telegram/webhook", status_code=HTTPStatus.ACCEPTED)
+@router.post("/integrations/telegram/webhook", status_code=HTTPStatus.OK)
 async def telegram_webhook(
     request: Request,
     update: TelegramUpdate,
@@ -384,9 +384,9 @@ async def telegram_webhook(
             f"{connect_url}"
         )
         return {
-            "status": "connect",
-            "reply": reply_text,
+            "method": "sendMessage",
             "chat_id": chat_id,
+            "text": reply_text,
         }
 
     sheet_id = getattr(settings, "telegram_default_sheet_id", None)
@@ -418,15 +418,15 @@ async def telegram_webhook(
 
     reply_text = result.prompt if result.status == "needs_more_info" else result.summary
 
-    reply: dict[str, Any] = {
-        "status": result.status,
-        "session_id": result.session_id,
-        "missing": result.missing_fields,
-        "reply": reply_text or "",
-        "chat_id": chat_id,
-    }
+    response_text = reply_text or (
+        "✅ Trade captured! I'll keep an eye out for your next update."
+    )
 
-    return reply
+    return {
+        "method": "sendMessage",
+        "chat_id": chat_id,
+        "text": response_text,
+    }
 
 
 def _build_follow_up_prompt(
