@@ -25,6 +25,27 @@ class GeminiClient:
         # Configure the global client once per process.
         genai.configure(api_key=settings.api_key)
 
+    async def generate_text(self, prompt: str) -> str:
+        """Produce a free-form text response using the configured model."""
+
+        def _invoke() -> str:
+            model = genai.GenerativeModel(self._settings.model_name)
+            try:
+                response = model.generate_content(prompt, safety_settings=[])
+            except NotFound as exc:  # pragma: no cover - network call
+                raise GeminiModelError(
+                    "Gemini model '"
+                    f"{self._settings.model_name}"
+                    "' is not available. Update GEMINI_MODEL_NAME to a supported value."
+                ) from exc
+            except GoogleAPICallError as exc:  # pragma: no cover - network call
+                raise GeminiModelError(
+                    f"Gemini text generate_content failed: {exc.message}"
+                ) from exc
+            return response.text or ""
+
+        return await asyncio.to_thread(_invoke)
+
     async def generate_trade_analysis(
         self,
         *,

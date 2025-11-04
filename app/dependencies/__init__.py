@@ -9,6 +9,7 @@ from .clients import (
     get_oauth_state_encoder,
     get_sheets_client,
     get_sqlite_store,
+    get_telegram_conversation_assistant,
     get_token_cipher_service,
     get_trade_capture_store,
     get_trade_extraction_service,
@@ -32,5 +33,6 @@ __all__ = [
     "get_sheets_client",
     "get_trade_ingestion_service",
     "get_trade_capture_store",
+    "get_telegram_conversation_assistant",
     "get_sqlite_store",
 ]

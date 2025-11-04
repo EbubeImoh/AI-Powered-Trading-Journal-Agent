@@ -16,6 +16,10 @@ from fastapi.responses import JSONResponse, RedirectResponse
 
 from app.clients.google_auth import OAuthTokenExchangeError, OAuthTokenNotFoundError
 from app.services.trade_capture import TradeCaptureSession
+from app.services.telegram_conversation import (
+    GeminiModelError,
+    TelegramConversationalAssistant,
+)
 from app.dependencies import (
     get_analysis_queue_service,
     get_app_settings,
@@ -27,6 +31,7 @@ from app.dependencies import (
     get_trade_capture_store,
     get_trade_extraction_service,
     get_trade_ingestion_service,
+    get_telegram_conversation_assistant,
 )
 from app.schemas import (
     AnalysisRequest,
@@ -272,8 +277,20 @@ async def submit_trade(
     aggregated_attachments = list(payload.attachments)
 
     structured_defaults = dict(session.structured) if session else {}
+    quick_updates: dict[str, Any] = {}
     if session:
-        history_lines = [*session.conversation, payload.content]
+        quick_updates = _absorb_user_reply(session, payload.content)
+        if quick_updates:
+            structured_defaults.update(quick_updates)
+            payload = payload.copy(update=quick_updates)
+
+    if session:
+        history_lines = list(session.conversation)
+        if quick_updates:
+            acknowledgement = _format_acknowledgement(quick_updates)
+            if acknowledgement:
+                history_lines.append(acknowledgement)
+        history_lines.append(payload.content)
         history_content = "\n".join(filter(None, history_lines))
         aggregated_attachments = [*session.attachments, *payload.attachments]
 
@@ -405,6 +422,9 @@ async def telegram_webhook(
     ingestion_service: Annotated[Any, Depends(get_trade_ingestion_service)],
     token_service: Annotated[Any, Depends(get_google_token_service)],
     capture_store: Annotated[Any, Depends(get_trade_capture_store)],
+    assistant: Annotated[
+        TelegramConversationalAssistant, Depends(get_telegram_conversation_assistant)
+    ],
     settings: Annotated[Any, Depends(get_app_settings)],
     token: str | None = Query(None, description="Bot token for verification."),
 ) -> dict:
@@ -450,6 +470,7 @@ async def telegram_webhook(
     session_id = active_session.session_id if active_session else None
 
     inferred_fields: dict[str, Any] = {}
+    inferred_fields: dict[str, Any] = {}
     submission = TradeSubmissionRequest(
         user_id=user_id,
         content=message.text,
@@ -493,18 +514,32 @@ async def telegram_webhook(
             }
         raise
 
-    acknowledgement = _format_acknowledgement(inferred_fields)
-
-    reply_text = result.prompt if result.status == "needs_more_info" else result.summary
-
-    response_text_core = reply_text or (
-        "✅ Trade captured! I'll keep an eye out for your next update."
+    session_for_reply = (
+        capture_store.get(result.session_id) if result.session_id else None
     )
-    response_text = (
-        f"{acknowledgement}\n\n{response_text_core}".strip()
-        if acknowledgement
-        else response_text_core
-    )
+
+    try:
+        response_text = await assistant.compose_reply(
+            user_message=text,
+            session=session_for_reply,
+            result=result,
+            inferred_fields=inferred_fields,
+        )
+    except GeminiModelError:
+        reply_text = (
+            result.summary
+            if result.status == "completed"
+            else result.prompt
+        )
+        acknowledgement = _format_acknowledgement(inferred_fields)
+        fallback_core = reply_text or (
+            "Gemini is unavailable right now. We'll keep your details safe; try again soon."
+        )
+        response_text = (
+            f"{acknowledgement}\n\n{fallback_core}".strip()
+            if acknowledgement
+            else fallback_core
+        )
 
     return {
         "method": "sendMessage",
@@ -558,21 +593,33 @@ def _format_acknowledgement(fields: dict[str, Any]) -> str:
 
     phrases: list[str] = []
     for key, value in fields.items():
+        if value is None:
+            if key == "ticker":
+                phrases.append("No worries, we'll grab the ticker next")
+            elif key == "pnl":
+                phrases.append("I'll wait for the PnL when you're ready")
+            elif key in {"entry_timestamp", "exit_timestamp"}:
+                phrases.append(f"Still awaiting the {key.replace('_', ' ')}")
+            continue
+
         if key == "ticker":
-            phrases.append(f"ticker noted as {value}")
+            phrases.append(f"Ticker noted as {value}")
         elif key == "pnl":
             phrases.append(f"PnL logged as {value}")
         elif key == "position_type":
-            phrases.append(f"position type set to {value}")
+            phrases.append(f"Position type set to {value}")
         elif key in {"entry_timestamp", "exit_timestamp"}:
             when = value.isoformat() if isinstance(value, datetime) else str(value)
-            phrases.append(f"{key.replace('_', ' ')} recorded as {when}")
+            phrases.append(f"{key.replace('_', ' ').title()} recorded as {when}")
         elif key == "notes":
-            phrases.append("added to your notes")
+            phrases.append("Added that to your notes")
 
     if not phrases:
         return ""
-    return "Got it — " + "; ".join(phrases)
+
+    if any(value is not None for value in fields.values()):
+        return "Got it — " + "; ".join(phrases)
+    return "; ".join(phrases)
 
 
 def _absorb_user_reply(
@@ -583,8 +630,15 @@ def _absorb_user_reply(
     if not pending or not text:
         return {}
 
+    if text.startswith("/") or text.startswith("!"):
+        return {}
+
     updates: dict[str, Any] = {}
     lower = text.lower()
+
+    negation_present = bool(
+        re.search(r"\b(no|not|isn't|ain't|never|nah|nope)\b", lower)
+    )
 
     if "position_type" in pending:
         for keyword in ("long", "short", "call", "put"):
@@ -619,9 +673,12 @@ def _absorb_user_reply(
                         updates[field] = parsed_dt
 
     if "ticker" in pending:
-        ticker = _extract_ticker_candidate(text)
-        if ticker:
-            updates.setdefault("ticker", ticker)
+        if ("ticker" in lower or "symbol" in lower) and negation_present:
+            updates.setdefault("ticker", None)
+        else:
+            ticker = _extract_ticker_candidate(text)
+            if ticker:
+                updates.setdefault("ticker", ticker)
 
     if "notes" in pending and text:
         updates.setdefault("notes", text)
@@ -653,6 +710,14 @@ def _extract_ticker_candidate(message_text: str) -> str | None:
         "IT",
         "WAS",
         "POSITION",
+        "START",
+        "TICKER",
+        "HELLO",
+        "THANKS",
+        "THANK",
+        "PLEASE",
+        "NO",
+        "NOT",
     }
     for token in reversed(tokens):
         candidate = token.upper()

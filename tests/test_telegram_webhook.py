@@ -51,6 +51,26 @@ class RecordingIngestionService:
         return TradeIngestionResponse(sheet_row_id="row-telegram", uploaded_files=[])
 
 
+class StubAssistant:
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, object, object, dict]] = []
+
+    async def compose_reply(self, **kwargs):
+        self.calls.append(
+            (
+                kwargs.get("user_message"),
+                kwargs.get("session"),
+                kwargs.get("result"),
+                kwargs.get("inferred_fields") or {},
+            )
+        )
+        result = kwargs.get("result")
+        if result and result.status == "completed":
+            return "assistant: trade captured"
+        missing = result.missing_fields if result else []
+        return f"assistant: missing {missing}"
+
+
 def _complete_trade(user_id: str = "chat-1") -> TradeIngestionRequest:
     return TradeIngestionRequest(
         user_id=user_id,
@@ -74,6 +94,7 @@ def overrides(tmp_path):
     extraction = ConfigurableExtractionService()
     ingestion = RecordingIngestionService()
     store = TradeCaptureStore(db_path=str(tmp_path / "telegram_capture.db"))
+    assistant = StubAssistant()
 
     base_settings = copy.deepcopy(get_settings())
     base_settings.telegram_bot_token = "bot-token"
@@ -87,10 +108,11 @@ def overrides(tmp_path):
             dependencies.get_trade_ingestion_service: lambda: ingestion,
             dependencies.get_trade_capture_store: lambda: store,
             dependencies.get_app_settings: lambda: base_settings,
+            dependencies.get_telegram_conversation_assistant: lambda: assistant,
         }
     )
 
-    yield extraction, ingestion, store, base_settings
+    yield extraction, ingestion, store, base_settings, assistant
 
     app.dependency_overrides.clear()
 
@@ -105,7 +127,7 @@ async def client(overrides):
 
 
 async def test_telegram_webhook_needs_more_info(overrides, client):
-    extraction, _, store, _ = overrides
+    extraction, _, store, _, assistant = overrides
 
     extraction.results.append(
         ExtractionResult(
@@ -135,13 +157,13 @@ async def test_telegram_webhook_needs_more_info(overrides, client):
     data = response.json()
     assert data["method"] == "sendMessage"
     assert data["chat_id"] == 42
-    assert "profit or loss" in data["text"].lower()
+    assert data["text"].startswith("assistant: missing")
     active_session = store.get_active_for_user("42")
     assert active_session is not None
 
 
 async def test_telegram_webhook_completed(overrides, client):
-    extraction, ingestion, store, _ = overrides
+    extraction, ingestion, store, _, assistant = overrides
 
     extraction.results.append(
         ExtractionResult(
@@ -171,12 +193,12 @@ async def test_telegram_webhook_completed(overrides, client):
     data = response.json()
     assert data["method"] == "sendMessage"
     assert data["chat_id"] == 77
-    assert "nvda" in data["text"].lower()
+    assert data["text"].startswith("assistant: trade captured")
     assert ingestion.requests
 
 
 async def test_telegram_webhook_connect(overrides, client):
-    extraction, ingestion, store, _ = overrides
+    extraction, ingestion, store, _, assistant = overrides
 
     payload = {
         "update_id": 456,
@@ -204,7 +226,7 @@ async def test_telegram_webhook_connect(overrides, client):
 
 
 async def test_telegram_connect_authorize_roundtrip(overrides, client):
-    _, _, _, base_settings = overrides
+    _, _, _, base_settings, assistant = overrides
     base_settings.telegram_connect_base_url = "https://api.pecuniatrust.com"
 
     class DummyOAuthClient:
@@ -256,7 +278,7 @@ async def test_telegram_connect_authorize_roundtrip(overrides, client):
 
 
 async def test_telegram_prompts_connect_when_not_authorized(overrides, client):
-    extraction, _, store, _ = overrides
+    extraction, _, store, _, assistant = overrides
 
     class UnauthorizedTokenService:
         async def get_credentials(self, *, user_id: str):
@@ -301,7 +323,7 @@ async def test_telegram_prompts_connect_when_not_authorized(overrides, client):
 
 
 async def test_telegram_absorbs_single_field_reply(overrides, client):
-    extraction, _, store, _ = overrides
+    extraction, _, store, _, assistant = overrides
 
     extraction.results.extend(
         [
@@ -354,7 +376,63 @@ async def test_telegram_absorbs_single_field_reply(overrides, client):
     )
     assert response.status_code == 200
     data = response.json()
-    lower = data["text"].lower()
-    assert "profit or loss" in lower
-    assert "which ticker" not in lower
+    assert data["text"].startswith("assistant: missing")
     assert extraction.submissions[-1].ticker == "GOLD"
+
+
+async def test_telegram_handles_ticker_negation(overrides, client):
+    extraction, _, store, _, assistant = overrides
+
+    extraction.results.extend(
+        [
+            ExtractionResult(
+                trade=None,
+                structured={},
+                missing_fields=["ticker", "pnl"],
+            ),
+            ExtractionResult(
+                trade=None,
+                structured={},
+                missing_fields=["ticker", "pnl"],
+            ),
+        ]
+    )
+
+    start_payload = {
+        "update_id": 1,
+        "message": {
+            "message_id": 1,
+            "date": 0,
+            "text": "Hi",
+            "chat": {"id": 201},
+        },
+    }
+
+    response = await client.post(
+        "/api/integrations/telegram/webhook",
+        params={"token": "bot-token"},
+        json=start_payload,
+    )
+    assert response.status_code == 200
+    session = store.get_active_for_user("201")
+    assert session is not None
+
+    follow_payload = {
+        "update_id": 2,
+        "message": {
+            "message_id": 2,
+            "date": 0,
+            "text": "No, that's not my ticker",
+            "chat": {"id": 201},
+        },
+    }
+
+    response = await client.post(
+        "/api/integrations/telegram/webhook",
+        params={"token": "bot-token"},
+        json=follow_payload,
+    )
+    assert response.status_code == 200
+    data = response.json()
+    assert data["text"].startswith("assistant: missing")
+    assert extraction.submissions[-1].ticker is None

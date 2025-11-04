@@ -18,6 +18,7 @@ from app.core.config import get_settings
 from app.services import (
     AnalysisQueueService,
     GoogleTokenService,
+    TelegramConversationalAssistant,
     TokenCipherService,
     TradeCaptureStore,
     TradeExtractionService,
@@ -127,6 +128,12 @@ def get_trade_ingestion_service() -> TradeIngestionService:
     )
 
 
+@lru_cache()
+def get_telegram_conversation_assistant() -> TelegramConversationalAssistant:
+    """Provide conversational helper for Telegram interactions."""
+    return TelegramConversationalAssistant(get_gemini_client())
+
+
 def get_analysis_queue_service() -> AnalysisQueueService:
     """Build an analysis queue service."""
     return AnalysisQueueService(
@@ -152,6 +159,7 @@ __all__ = [
     "get_token_cipher_service",
     "get_google_token_service",
     "get_oauth_state_encoder",
+    "get_telegram_conversation_assistant",
     "get_web_search_client",
     "get_sheets_client",
     "get_trade_extraction_service",

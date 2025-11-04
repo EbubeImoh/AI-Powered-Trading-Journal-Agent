@@ -6,6 +6,7 @@ from .token_cipher import TokenCipherService
 from .trade_capture import TradeCaptureSession, TradeCaptureStore
 from .trade_extraction import ExtractionResult, TradeExtractionService
 from .trade_ingestion import TradeIngestionService
+from .telegram_conversation import TelegramConversationalAssistant, GeminiModelError
 
 __all__ = [
     "AnalysisQueueService",
@@ -16,4 +17,6 @@ __all__ = [
     "TradeCaptureStore",
     "TradeExtractionService",
     "TradeIngestionService",
+    "TelegramConversationalAssistant",
+    "GeminiModelError",
 ]
