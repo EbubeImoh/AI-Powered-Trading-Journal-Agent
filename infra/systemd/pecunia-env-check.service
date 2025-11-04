@@ -1,0 +1,16 @@
+[Unit]
+# Update the WorkingDirectory/ExecStart/User values to reflect the deployment host.
+Description=Pecunia API environment integrity verification
+Wants=pecunia-env-check.timer
+After=network-online.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=/opt/pecunia/app
+ExecStart=/usr/bin/env python -m scripts.check_env verify --env-file /opt/pecunia/.env --hash-file /opt/pecunia/.env.sha256
+Environment=PYTHONPATH=/opt/pecunia/app
+User=pecunia
+Group=pecunia
+
+[Install]
+WantedBy=multi-user.target

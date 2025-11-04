@@ -5,9 +5,10 @@ except Exception:  # pragma: no cover - fallback for direct execution
 
 import copy
 from datetime import datetime
+from urllib.parse import parse_qs, urlparse
 
+import httpx
 import pytest
-from fastapi.testclient import TestClient
 
 from app.main import app
 from app.schemas import TradeIngestionRequest, TradeIngestionResponse
@@ -58,6 +59,9 @@ def _complete_trade(user_id: str = "chat-1") -> TradeIngestionRequest:
     )
 
 
+pytestmark = pytest.mark.anyio("asyncio")
+
+
 @pytest.fixture()
 def overrides(tmp_path):
     from app import dependencies
@@ -82,13 +86,22 @@ def overrides(tmp_path):
         }
     )
 
-    yield extraction, ingestion, store
+    yield extraction, ingestion, store, base_settings
 
     app.dependency_overrides.clear()
 
 
-def test_telegram_webhook_needs_more_info(overrides):
-    extraction, _, store = overrides
+@pytest.fixture()
+async def client(overrides):
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app),
+        base_url="http://testserver",
+    ) as test_client:
+        yield test_client
+
+
+async def test_telegram_webhook_needs_more_info(overrides, client):
+    extraction, _, store, _ = overrides
 
     extraction.results.append(
         ExtractionResult(
@@ -98,7 +111,6 @@ def test_telegram_webhook_needs_more_info(overrides):
         )
     )
 
-    client = TestClient(app)
     payload = {
         "update_id": 123,
         "message": {
@@ -109,7 +121,7 @@ def test_telegram_webhook_needs_more_info(overrides):
         },
     }
 
-    response = client.post(
+    response = await client.post(
         "/api/integrations/telegram/webhook",
         params={"token": "bot-token"},
         json=payload,
@@ -124,8 +136,8 @@ def test_telegram_webhook_needs_more_info(overrides):
     assert store.get(session_id)
 
 
-def test_telegram_webhook_completed(overrides):
-    extraction, ingestion, store = overrides
+async def test_telegram_webhook_completed(overrides, client):
+    extraction, ingestion, store, _ = overrides
 
     extraction.results.append(
         ExtractionResult(
@@ -135,7 +147,6 @@ def test_telegram_webhook_completed(overrides):
         )
     )
 
-    client = TestClient(app)
     payload = {
         "update_id": 123,
         "message": {
@@ -146,7 +157,7 @@ def test_telegram_webhook_completed(overrides):
         },
     }
 
-    response = client.post(
+    response = await client.post(
         "/api/integrations/telegram/webhook",
         params={"token": "bot-token"},
         json=payload,
@@ -159,10 +170,9 @@ def test_telegram_webhook_completed(overrides):
     assert ingestion.requests
 
 
-def test_telegram_webhook_connect(overrides):
-    extraction, ingestion, store = overrides
+async def test_telegram_webhook_connect(overrides, client):
+    extraction, ingestion, store, _ = overrides
 
-    client = TestClient(app)
     payload = {
         "update_id": 456,
         "message": {
@@ -173,7 +183,7 @@ def test_telegram_webhook_connect(overrides):
         },
     }
 
-    response = client.post(
+    response = await client.post(
         "/api/integrations/telegram/webhook",
         params={"token": "bot-token"},
         json=payload,
@@ -185,3 +195,54 @@ def test_telegram_webhook_connect(overrides):
     assert "connect your google account" in data["reply"].lower()
     assert "user_id=99" in data["reply"]
     assert data["chat_id"] == 99
+
+
+async def test_telegram_connect_authorize_roundtrip(overrides, client):
+    _, _, _, base_settings = overrides
+    base_settings.telegram_connect_base_url = "https://api.pecuniatrust.com"
+
+    class DummyOAuthClient:
+        def __init__(self) -> None:
+            self.states: list[str] = []
+
+        def build_authorization_url(self, state: str) -> str:
+            self.states.append(state)
+            return f"https://oauth.example.com/auth?state={state}"
+
+    from app.dependencies import get_google_oauth_client
+
+    dummy_client = DummyOAuthClient()
+    app.dependency_overrides[get_google_oauth_client] = lambda: dummy_client
+
+    payload = {
+        "update_id": 789,
+        "message": {
+            "message_id": 3,
+            "date": 0,
+            "text": "/connect",
+            "chat": {"id": 12345},
+        },
+    }
+
+    response = await client.post(
+        "/api/integrations/telegram/webhook",
+        params={"token": "bot-token"},
+        json=payload,
+    )
+
+    assert response.status_code == 202
+    connect_reply = response.json()
+    link_line = connect_reply["reply"].splitlines()[-1].strip()
+
+    parsed = urlparse(link_line)
+    assert parsed.scheme == "https"
+    assert parsed.netloc == "api.pecuniatrust.com"
+    assert parsed.path == "/api/auth/google/authorize"
+    query = {key: values[0] for key, values in parse_qs(parsed.query).items()}
+    assert query == {"user_id": "12345"}
+
+    auth_response = await client.get(parsed.path, params=query)
+    assert auth_response.status_code == 200
+    data = auth_response.json()
+    assert data["authorization_url"].startswith("https://oauth.example.com/auth")
+    assert dummy_client.states and dummy_client.states[-1] == data["state"]

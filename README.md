@@ -159,6 +159,12 @@ Provide remaining variables (e.g., `gemini_api_key`) via CLI flags, a `.tfvars` 
 
 ## Operational Notes
 
+- **Environment Integrity**
+  - Run `make env-record ENV_FILE=/opt/pecunia/.env ENV_HASH=/opt/pecunia/.env.sha256` on a known-good deployment to capture the expected checksum once credentials are verified.
+  - Install the automated drift detector with `sudo bash scripts/install_env_check_timer.sh` (copies `infra/systemd/pecunia-env-check.*` into `/etc/systemd/system` and enables a 5‑minute timer).
+  - Alternatively, schedule `python -m scripts.check_env verify --env-file /opt/pecunia/.env --hash-file /opt/pecunia/.env.sha256` via cron if systemd timers are unavailable.
+  - Before restarting services, run `scripts/pre_restart_check.sh /opt/pecunia/.env` or simply `make env-check ENV_FILE=/opt/pecunia/.env` to fail fast when required variables are missing.
+
 - **API Quotas & Retries**
   - Google Drive downloads use built-in retries with exponential backoff (3 attempts). Monitor for `HttpError` spikes and consider service account whitelisting if volume grows.
   - SerpAPI calls retry automatically; track usage in the SerpAPI dashboard and adjust `num`/`engine` parameters for budget.

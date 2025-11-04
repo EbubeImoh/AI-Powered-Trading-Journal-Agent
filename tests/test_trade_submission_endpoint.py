@@ -6,8 +6,8 @@ except Exception:  # pragma: no cover - fallback for direct execution
 import base64
 from datetime import datetime
 
+import httpx
 import pytest
-from fastapi.testclient import TestClient
 
 from app.main import app
 from app.schemas import (
@@ -59,6 +59,9 @@ class RecordingIngestionService:
         return TradeIngestionResponse(sheet_row_id="row-1", uploaded_files=[])
 
 
+pytestmark = pytest.mark.anyio("asyncio")
+
+
 @pytest.fixture()
 def overrides(tmp_path):
     from app import dependencies
@@ -84,6 +87,15 @@ def overrides(tmp_path):
     app.dependency_overrides.clear()
 
 
+@pytest.fixture()
+async def client(overrides):
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app),
+        base_url="http://testserver",
+    ) as test_client:
+        yield test_client
+
+
 def _build_complete_trade(user_id: str = "user-1") -> TradeIngestionRequest:
     return TradeIngestionRequest(
         user_id=user_id,
@@ -96,7 +108,7 @@ def _build_complete_trade(user_id: str = "user-1") -> TradeIngestionRequest:
     )
 
 
-def test_submit_trade_endpoint_completed(overrides):
+async def test_submit_trade_endpoint_completed(overrides, client):
     extraction, ingestion, _ = overrides
     extraction.results.append(
         ExtractionResult(
@@ -106,7 +118,6 @@ def test_submit_trade_endpoint_completed(overrides):
         )
     )
 
-    client = TestClient(app)
     payload = {
         "user_id": "user-1",
         "content": "Bought NVDA call options",
@@ -121,7 +132,7 @@ def test_submit_trade_endpoint_completed(overrides):
         "pnl": 420.0,
     }
 
-    response = client.post(
+    response = await client.post(
         "/api/trades/submit",
         params={"sheet_id": "sheet-1"},
         json=payload,
@@ -135,7 +146,7 @@ def test_submit_trade_endpoint_completed(overrides):
     assert ingestion.requests[0]["sheet_id"] == "sheet-1"
 
 
-def test_submit_trade_endpoint_requests_more_info(overrides):
+async def test_submit_trade_endpoint_requests_more_info(overrides, client):
     extraction, _, store = overrides
     extraction.results.append(
         ExtractionResult(
@@ -145,13 +156,12 @@ def test_submit_trade_endpoint_requests_more_info(overrides):
         )
     )
 
-    client = TestClient(app)
     payload = {
         "user_id": "user-83",
         "content": "Short NVDA on rejection",
     }
 
-    response = client.post(
+    response = await client.post(
         "/api/trades/submit",
         params={"sheet_id": "sheet-1"},
         json=payload,
