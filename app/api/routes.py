@@ -10,6 +10,7 @@ from http import HTTPStatus
 from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
+from fastapi.responses import RedirectResponse
 
 from app.clients.google_auth import OAuthTokenExchangeError, OAuthTokenNotFoundError
 from app.dependencies import (
@@ -54,12 +55,17 @@ async def healthcheck() -> dict:
 
 @router.get("/auth/google/authorize", status_code=HTTPStatus.OK)
 async def start_google_oauth_flow(
+    request: Request,
     oauth_client: Annotated[Any, Depends(get_google_oauth_client)],
     state_encoder: Annotated[Any, Depends(get_oauth_state_encoder)],
     user_id: str = Query(..., description="User identifier initiating authentication."),
     redirect_to: str | None = Query(
         default=None,
         description="Optional URL to redirect back to on successful authentication.",
+    ),
+    redirect: bool = Query(
+        default=False,
+        description="When true, respond with a redirect to the Google consent screen.",
     ),
 ) -> dict:
     """
@@ -74,6 +80,12 @@ async def start_google_oauth_flow(
     }
     state = state_encoder.encode(state_payload)
     authorization_url = oauth_client.build_authorization_url(state=state)
+
+    accept_header = request.headers.get("accept", "")
+    wants_html = "text/html" in accept_header.lower()
+    if redirect or wants_html:
+        return RedirectResponse(url=authorization_url, status_code=HTTPStatus.TEMPORARY_REDIRECT)
+
     return {"authorization_url": authorization_url, "state": state}
 
 
@@ -378,7 +390,7 @@ async def telegram_webhook(
             authorize_base = f"{str(base_url).rstrip('/')}/api/auth/google/authorize"
         else:
             authorize_base = str(request.url_for("start_google_oauth_flow"))
-        connect_url = f"{authorize_base}?user_id={user_id}"
+        connect_url = f"{authorize_base}?user_id={user_id}&redirect=1"
         reply_text = (
             "Tap to connect your Google account:\n"
             f"{connect_url}"

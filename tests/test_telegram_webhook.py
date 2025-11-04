@@ -198,6 +198,7 @@ async def test_telegram_webhook_connect(overrides, client):
     assert data["chat_id"] == 99
     assert "connect your google account" in data["text"].lower()
     assert "user_id=99" in data["text"]
+    assert "redirect=1" in data["text"]
 
 
 async def test_telegram_connect_authorize_roundtrip(overrides, client):
@@ -243,9 +244,9 @@ async def test_telegram_connect_authorize_roundtrip(overrides, client):
     assert parsed.netloc == "api.pecuniatrust.com"
     assert parsed.path == "/api/auth/google/authorize"
     query = {key: values[0] for key, values in parse_qs(parsed.query).items()}
-    assert query == {"user_id": "12345"}
+    assert query == {"user_id": "12345", "redirect": "1"}
 
-    auth_response = await client.get(parsed.path, params=query)
+    auth_response = await client.get(parsed.path, params={"user_id": "12345"})
     assert auth_response.status_code == 200
     data = auth_response.json()
     assert data["authorization_url"].startswith("https://oauth.example.com/auth")
