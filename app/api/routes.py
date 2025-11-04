@@ -430,6 +430,8 @@ async def telegram_webhook(
     assistant: Annotated[
         TelegramConversationalAssistant, Depends(get_telegram_conversation_assistant)
     ],
+    queue_service: Annotated[Any, Depends(get_analysis_queue_service)],
+    record_store: Annotated[Any, Depends(get_sqlite_store)],
     settings: Annotated[Any, Depends(get_app_settings)],
     token: str | None = Query(None, description="Bot token for verification."),
 ) -> dict:
@@ -455,6 +457,13 @@ async def telegram_webhook(
     if expected_token and token != expected_token:
         raise HTTPException(status_code=HTTPStatus.FORBIDDEN, detail="Invalid token")
 
+    sheet_id = getattr(settings, "telegram_default_sheet_id", None)
+    if not sheet_id:
+        raise HTTPException(
+            status_code=HTTPStatus.INTERNAL_SERVER_ERROR,
+            detail="Telegram sheet configuration missing.",
+        )
+
     if text.lower().startswith("/connect"):
         base_url = settings.telegram_connect_base_url
         if base_url:
@@ -472,12 +481,63 @@ async def telegram_webhook(
             "text": reply_text,
         }
 
-    sheet_id = getattr(settings, "telegram_default_sheet_id", None)
-    if not sheet_id:
-        raise HTTPException(
-            status_code=HTTPStatus.INTERNAL_SERVER_ERROR,
-            detail="Telegram sheet configuration missing.",
+    if text.lower().startswith("/analysis_status"):
+        parts = text.split(maxsplit=1)
+        if len(parts) < 2:
+            return {
+                "method": "sendMessage",
+                "chat_id": chat_id,
+                "text": "Usage: /analysis_status <job_id>",
+            }
+        job_id = parts[1].strip()
+        item = record_store.get_item(
+            partition_key=f"user#{user_id}", sort_key=f"analysis#{job_id}"
         )
+        if not item:
+            return {
+                "method": "sendMessage",
+                "chat_id": chat_id,
+                "text": f"I couldn't find an analysis job with ID {job_id}.",
+            }
+        status = item.get("status", "unknown")
+        summary = item.get("summary") or item.get("report_markdown")
+        message = f"Analysis job {job_id} status: {status.upper()}"
+        if summary:
+            message += f"\n\nSummary:\n{summary[:1000]}"
+        return {
+            "method": "sendMessage",
+            "chat_id": chat_id,
+            "text": message,
+        }
+
+    if text.lower().startswith("/analysis"):
+        try:
+            await token_service.get_credentials(user_id=user_id)
+        except OAuthTokenNotFoundError as exc:
+            raise HTTPException(
+                status_code=HTTPStatus.UNAUTHORIZED,
+                detail="Google account not connected.",
+            ) from exc
+
+        prompt = text.partition(" ")[2].strip()
+        if not prompt:
+            prompt = "Provide a performance summary of my recent trades."
+
+        analysis_request = AnalysisRequest(
+            user_id=user_id,
+            sheet_id=sheet_id,
+            sheet_range=None,
+            prompt=prompt,
+        )
+        job_id = queue_service.enqueue_analysis(request=analysis_request)
+        return {
+            "method": "sendMessage",
+            "chat_id": chat_id,
+            "text": (
+                f"Analysis job queued with ID {job_id}. "
+                "I'll keep an eye out for the results."
+            ),
+        }
 
     active_session = capture_store.get_active_for_user(user_id)
     session_id = active_session.session_id if active_session else None
@@ -813,6 +873,12 @@ def _absorb_user_reply(
         re.search(r"\b(no|not|isn't|ain't|never|nah|nope)\b", lower)
     )
 
+    entry_keywords = {"entry", "entered", "open"}
+    exit_keywords = {"exit", "exited", "close", "closed"}
+
+    mentions_entry = any(word in lower for word in entry_keywords)
+    mentions_exit = any(word in lower for word in exit_keywords)
+
     if "position_type" in pending:
         for keyword in ("long", "short", "call", "put"):
             if keyword in lower:
@@ -828,22 +894,17 @@ def _absorb_user_reply(
                 pass
 
     if "entry_timestamp" in pending or "exit_timestamp" in pending:
-        dt_match = re.search(
-            r"\b\d{4}-\d{2}-\d{2}(?:[ T]\d{2}:\d{2}(?::\d{2})?)?(?:Z|[+-]\d{2}:\d{2})?\b",
-            text,
-        )
-        if dt_match:
-            candidate = dt_match.group(0).replace(" ", "T")
-            if candidate.endswith("Z"):
-                candidate = candidate[:-1] + "+00:00"
-            try:
-                parsed_dt = datetime.fromisoformat(candidate)
-            except ValueError:
-                parsed_dt = None
-            if parsed_dt:
+        parsed_dt = _parse_datetime_expression(text)
+        if parsed_dt:
+            if mentions_exit and "exit_timestamp" in pending:
+                updates.setdefault("exit_timestamp", parsed_dt)
+            elif mentions_entry and "entry_timestamp" in pending:
+                updates.setdefault("entry_timestamp", parsed_dt)
+            else:
                 for field in ("entry_timestamp", "exit_timestamp"):
                     if field in pending and field not in updates:
                         updates[field] = parsed_dt
+                        break
 
     if "ticker" in pending:
         if ("ticker" in lower or "symbol" in lower) and negation_present:
@@ -896,6 +957,40 @@ def _extract_ticker_candidate(message_text: str) -> str | None:
         candidate = token.upper()
         if candidate not in stop_words:
             return candidate
+    return None
+
+
+def _parse_datetime_expression(message_text: str) -> datetime | None:
+    # ISO-like pattern first
+    iso_match = re.search(
+        r"\b\d{4}-\d{2}-\d{2}(?:[ T]\d{2}:\d{2}(?::\d{2})?)?(?:Z|[+-]\d{2}:\d{2})?\b",
+        message_text,
+    )
+    if iso_match:
+        candidate = iso_match.group(0).replace(" ", "T")
+        if candidate.endswith("Z"):
+            candidate = candidate[:-1] + "+00:00"
+        try:
+            return datetime.fromisoformat(candidate)
+        except ValueError:
+            return None
+
+    time_match = re.search(
+        r"\b(\d{1,2})(?::(\d{2}))?\s*(am|pm)\b",
+        message_text,
+        flags=re.IGNORECASE,
+    )
+    if time_match:
+        hour = int(time_match.group(1))
+        minute = int(time_match.group(2) or 0)
+        meridiem = time_match.group(3).lower()
+        if hour == 12:
+            hour = 0
+        if meridiem == "pm":
+            hour += 12
+        now = datetime.now(timezone.utc)
+        return now.replace(hour=hour, minute=minute, second=0, microsecond=0)
+
     return None
 
 

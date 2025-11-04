@@ -95,6 +95,8 @@ def overrides(tmp_path):
     ingestion = RecordingIngestionService()
     store = TradeCaptureStore(db_path=str(tmp_path / "telegram_capture.db"))
     assistant = StubAssistant()
+    queue_service = RecordingQueueService()
+    record_store = DummyRecordStore()
 
     base_settings = copy.deepcopy(get_settings())
     base_settings.telegram_bot_token = "bot-token"
@@ -112,10 +114,12 @@ def overrides(tmp_path):
             dependencies.get_trade_capture_store: lambda: store,
             dependencies.get_app_settings: lambda: base_settings,
             dependencies.get_telegram_conversation_assistant: lambda: assistant,
+            dependencies.get_analysis_queue_service: lambda: queue_service,
+            dependencies.get_sqlite_store: lambda: record_store,
         }
     )
 
-    yield extraction, ingestion, store, base_settings, assistant
+    yield extraction, ingestion, store, base_settings, assistant, queue_service, record_store
 
     app.dependency_overrides.clear()
 
@@ -130,7 +134,7 @@ async def client(overrides):
 
 
 async def test_telegram_webhook_needs_more_info(overrides, client):
-    extraction, _, store, _, assistant = overrides
+    extraction, _, store, _, assistant, _, _ = overrides
 
     extraction.results.append(
         ExtractionResult(
@@ -166,7 +170,7 @@ async def test_telegram_webhook_needs_more_info(overrides, client):
 
 
 async def test_telegram_webhook_completed(overrides, client):
-    extraction, ingestion, store, _, assistant = overrides
+    extraction, ingestion, store, _, assistant, _, _ = overrides
 
     extraction.results.append(
         ExtractionResult(
@@ -201,7 +205,7 @@ async def test_telegram_webhook_completed(overrides, client):
 
 
 async def test_telegram_webhook_connect(overrides, client):
-    extraction, ingestion, store, _, assistant = overrides
+    extraction, ingestion, store, _, assistant, _, _ = overrides
 
     payload = {
         "update_id": 456,
@@ -229,7 +233,7 @@ async def test_telegram_webhook_connect(overrides, client):
 
 
 async def test_telegram_connect_authorize_roundtrip(overrides, client):
-    _, _, _, base_settings, assistant = overrides
+    _, _, _, base_settings, assistant, _, _ = overrides
     base_settings.telegram_connect_base_url = "https://api.pecuniatrust.com"
 
     class DummyOAuthClient:
@@ -281,7 +285,7 @@ async def test_telegram_connect_authorize_roundtrip(overrides, client):
 
 
 async def test_telegram_prompts_connect_when_not_authorized(overrides, client):
-    extraction, _, store, _, assistant = overrides
+    extraction, _, store, _, assistant, _, _ = overrides
 
     class UnauthorizedTokenService:
         async def get_credentials(self, *, user_id: str):
@@ -326,7 +330,7 @@ async def test_telegram_prompts_connect_when_not_authorized(overrides, client):
 
 
 async def test_telegram_absorbs_single_field_reply(overrides, client):
-    extraction, _, store, _, assistant = overrides
+    extraction, _, store, _, assistant, _, _ = overrides
 
     extraction.results.extend(
         [
@@ -384,7 +388,7 @@ async def test_telegram_absorbs_single_field_reply(overrides, client):
 
 
 async def test_telegram_handles_ticker_negation(overrides, client):
-    extraction, _, store, _, assistant = overrides
+    extraction, _, store, _, assistant, _, _ = overrides
 
     extraction.results.extend(
         [
@@ -444,7 +448,7 @@ async def test_telegram_handles_ticker_negation(overrides, client):
 async def test_telegram_handles_photo_attachment(monkeypatch, overrides, client):
     from app.api import routes as telegram_routes
 
-    extraction, _, store, _, assistant = overrides
+    extraction, _, store, _, assistant, _, _ = overrides
 
     extraction.results.extend(
         [
@@ -509,3 +513,133 @@ async def test_telegram_handles_photo_attachment(monkeypatch, overrides, client)
     assert extraction.submissions, "extraction service should receive submission"
     assert extraction.submissions[-1].attachments
     assert assistant.calls[-1][0].startswith("Here is the setup")
+
+
+async def test_telegram_parses_natural_entry_time(overrides, client):
+    extraction, _, store, _, assistant, _, _ = overrides
+
+    extraction.results.extend(
+        [
+            ExtractionResult(
+                trade=None,
+                structured={},
+                missing_fields=["ticker", "entry_timestamp"],
+            ),
+            ExtractionResult(
+                trade=None,
+                structured={"ticker": "GOLD"},
+                missing_fields=["exit_timestamp"],
+            ),
+        ]
+    )
+
+    start_payload = {
+        "update_id": 20,
+        "message": {
+            "message_id": 10,
+            "date": 0,
+            "text": "Start",
+            "chat": {"id": 400},
+        },
+    }
+
+    await client.post(
+        "/api/integrations/telegram/webhook",
+        params={"token": "bot-token"},
+        json=start_payload,
+    )
+
+    follow_payload = {
+        "update_id": 21,
+        "message": {
+            "message_id": 11,
+            "date": 0,
+            "text": "My entry was 3pm",
+            "chat": {"id": 400},
+        },
+    }
+
+    await client.post(
+        "/api/integrations/telegram/webhook",
+        params={"token": "bot-token"},
+        json=follow_payload,
+    )
+
+    submission = extraction.submissions[-1]
+    assert submission.entry_timestamp is not None
+    assert submission.entry_timestamp.tzinfo is not None
+    assert submission.entry_timestamp.hour == 15
+
+
+async def test_telegram_analysis_enqueue(overrides, client):
+    extraction, _, store, base_settings, assistant, queue_service, record_store = overrides
+
+    payload = {
+        "update_id": 30,
+        "message": {
+            "message_id": 15,
+            "date": 0,
+            "text": "/analysis Summarize last week's trades",
+            "chat": {"id": 500},
+        },
+    }
+
+    response = await client.post(
+        "/api/integrations/telegram/webhook",
+        params={"token": "bot-token"},
+        json=payload,
+    )
+
+    assert response.status_code == 200
+    assert "job-1" in response.json()["text"]
+    assert queue_service.requests
+    request = queue_service.requests[-1]
+    assert request.prompt == "Summarize last week's trades"
+
+
+async def test_telegram_analysis_status(overrides, client):
+    extraction, _, store, base_settings, assistant, queue_service, record_store = overrides
+
+    record_store.items[("user#500", "analysis#job-1")] = {
+        "status": "completed",
+        "summary": "All good",
+    }
+
+    payload = {
+        "update_id": 31,
+        "message": {
+            "message_id": 16,
+            "date": 0,
+            "text": "/analysis_status job-1",
+            "chat": {"id": 500},
+        },
+    }
+
+    response = await client.post(
+        "/api/integrations/telegram/webhook",
+        params={"token": "bot-token"},
+        json=payload,
+    )
+
+    assert response.status_code == 200
+    text = response.json()["text"].lower()
+    assert "job-1" in text and "completed" in text
+class RecordingQueueService:
+    def __init__(self) -> None:
+        self.requests = []
+
+    def enqueue_analysis(self, request):
+        self.requests.append(request)
+        return f"job-{len(self.requests)}"
+
+
+class DummyRecordStore:
+    def __init__(self) -> None:
+        self.items = {}
+
+    def get_item(self, *, partition_key: str, sort_key: str):
+        return self.items.get((partition_key, sort_key))
+
+    def put_item(self, item):  # pragma: no cover - not used in tests
+        key = (item["pk"], item["sk"])
+        self.items[key] = item
