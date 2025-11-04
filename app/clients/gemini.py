@@ -8,8 +8,13 @@ from textwrap import dedent
 from typing import Any, Iterable
 
 import google.generativeai as genai
+from google.api_core.exceptions import GoogleAPICallError, NotFound
 
 from app.core.config import GeminiSettings
+
+
+class GeminiModelError(RuntimeError):
+    """Raised when Gemini cannot fulfill a request due to configuration issues."""
 
 
 class GeminiClient:
@@ -42,7 +47,18 @@ class GeminiClient:
                 image_insights=image_insights or [],
                 web_research=web_research or [],
             )
-            response = model.generate_content(content, safety_settings=[])
+            try:
+                response = model.generate_content(content, safety_settings=[])
+            except NotFound as exc:  # pragma: no cover - network call
+                raise GeminiModelError(
+                    "Gemini model '"
+                    f"{self._settings.model_name}"
+                    "' is not available. Update GEMINI_MODEL_NAME to a supported value."
+                ) from exc
+            except GoogleAPICallError as exc:  # pragma: no cover - network call
+                raise GeminiModelError(
+                    f"Gemini generate_content failed: {exc.message}"
+                ) from exc
             return response.text or ""
 
         raw = await asyncio.to_thread(_invoke)
@@ -59,16 +75,27 @@ class GeminiClient:
 
         def _invoke() -> str:
             model = genai.GenerativeModel(self._settings.vision_model_name)
-            response = model.generate_content(
-                [
-                    prompt,
-                    {
-                        "mime_type": mime_type,
-                        "data": image_base64,
-                    },
-                ],
-                safety_settings=[],
-            )
+            try:
+                response = model.generate_content(
+                    [
+                        prompt,
+                        {
+                            "mime_type": mime_type,
+                            "data": image_base64,
+                        },
+                    ],
+                    safety_settings=[],
+                )
+            except NotFound as exc:  # pragma: no cover - network call
+                raise GeminiModelError(
+                    "Gemini vision model '"
+                    f"{self._settings.vision_model_name}"
+                    "' is not available. Update GEMINI_VISION_MODEL_NAME to a supported value."
+                ) from exc
+            except GoogleAPICallError as exc:  # pragma: no cover - network call
+                raise GeminiModelError(
+                    f"Gemini vision generate_content failed: {exc.message}"
+                ) from exc
             return response.text or ""
 
         raw = await asyncio.to_thread(_invoke)
@@ -85,18 +112,29 @@ class GeminiClient:
 
         def _invoke() -> str:
             model = genai.GenerativeModel(self._settings.model_name)
-            response = model.generate_content(
-                [
-                    {
-                        "role": "user",
-                        "parts": [
-                            {"text": prompt},
-                            {"mime_type": mime_type, "data": audio_base64},
-                        ],
-                    }
-                ],
-                safety_settings=[],
-            )
+            try:
+                response = model.generate_content(
+                    [
+                        {
+                            "role": "user",
+                            "parts": [
+                                {"text": prompt},
+                                {"mime_type": mime_type, "data": audio_base64},
+                            ],
+                        }
+                    ],
+                    safety_settings=[],
+                )
+            except NotFound as exc:  # pragma: no cover - network call
+                raise GeminiModelError(
+                    "Gemini model '"
+                    f"{self._settings.model_name}"
+                    "' is not available. Update GEMINI_MODEL_NAME to a supported value."
+                ) from exc
+            except GoogleAPICallError as exc:  # pragma: no cover - network call
+                raise GeminiModelError(
+                    f"Gemini audio generate_content failed: {exc.message}"
+                ) from exc
             return response.text or ""
 
         raw = await asyncio.to_thread(_invoke)
@@ -131,15 +169,26 @@ class GeminiClient:
                     f"{content}"
                 )
             )
-            response = model.generate_content(
-                [
-                    {
-                        "role": "user",
-                        "parts": [prompt],
-                    }
-                ],
-                safety_settings=[],
-            )
+            try:
+                response = model.generate_content(
+                    [
+                        {
+                            "role": "user",
+                            "parts": [prompt],
+                        }
+                    ],
+                    safety_settings=[],
+                )
+            except NotFound as exc:  # pragma: no cover - network call
+                raise GeminiModelError(
+                    "Gemini model '"
+                    f"{self._settings.model_name}"
+                    "' is not available. Update GEMINI_MODEL_NAME to a supported value."
+                ) from exc
+            except GoogleAPICallError as exc:  # pragma: no cover - network call
+                raise GeminiModelError(
+                    f"Gemini text generate_content failed: {exc.message}"
+                ) from exc
             return response.text or ""
 
         raw = await asyncio.to_thread(_invoke)

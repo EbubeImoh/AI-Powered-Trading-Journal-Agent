@@ -9,6 +9,7 @@ from fastapi import HTTPException, status
 from pydantic import ValidationError
 
 from app.clients import GeminiClient
+from app.clients.gemini import GeminiModelError
 from app.schemas import TradeIngestionRequest, TradeSubmissionRequest
 
 
@@ -46,11 +47,17 @@ class TradeExtractionService:
             if value is not None:
                 overrides[field_name] = value
 
-        gemini_payload = await self._gemini.extract_trade_details(
-            content=submission.content,
-            attachment_metadata=attachment_metadata,
-            overrides=overrides,
-        )
+        try:
+            gemini_payload = await self._gemini.extract_trade_details(
+                content=submission.content,
+                attachment_metadata=attachment_metadata,
+                overrides=overrides,
+            )
+        except GeminiModelError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail=str(exc),
+            ) from exc
 
         structured: Dict[str, Any] = {**gemini_payload, **overrides}
         structured["user_id"] = submission.user_id

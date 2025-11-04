@@ -474,6 +474,15 @@ async def telegram_webhook(
                     "Send /connect to authorize me, then try again."
                 ),
             }
+        if exc.status_code == HTTPStatus.SERVICE_UNAVAILABLE:
+            return {
+                "method": "sendMessage",
+                "chat_id": chat_id,
+                "text": (
+                    "Gemini is unavailable right now (model configuration issue). "
+                    "Please check the GEMINI_MODEL_NAME setting or try again later."
+                ),
+            }
         raise
 
     reply_text = result.prompt if result.status == "needs_more_info" else result.summary
