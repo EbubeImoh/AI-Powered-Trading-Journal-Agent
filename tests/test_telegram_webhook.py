@@ -13,7 +13,7 @@ from fastapi import HTTPException
 from http import HTTPStatus
 
 from app.main import app
-from app.schemas import TradeIngestionRequest, TradeIngestionResponse
+from app.schemas import TradeIngestionRequest, TradeIngestionResponse, TradeSubmissionRequest
 from app.services.trade_capture import TradeCaptureStore
 from app.services.trade_extraction import ExtractionResult
 
@@ -26,8 +26,10 @@ class StubTokenService:
 class ConfigurableExtractionService:
     def __init__(self) -> None:
         self.results: list[ExtractionResult] = []
+        self.submissions: list[TradeSubmissionRequest] = []
 
     async def extract(self, submission):
+        self.submissions.append(submission)
         if not self.results:
             raise AssertionError("Extraction result not configured")
         return self.results.pop(0)
@@ -296,3 +298,63 @@ async def test_telegram_prompts_connect_when_not_authorized(overrides, client):
             app.dependency_overrides[override_key] = previous
         else:
             app.dependency_overrides.pop(override_key, None)
+
+
+async def test_telegram_absorbs_single_field_reply(overrides, client):
+    extraction, _, store, _ = overrides
+
+    extraction.results.extend(
+        [
+            ExtractionResult(
+                trade=None,
+                structured={},
+                missing_fields=["ticker", "pnl"],
+            ),
+            ExtractionResult(
+                trade=None,
+                structured={"ticker": "GOLD"},
+                missing_fields=["pnl"],
+            ),
+        ]
+    )
+
+    start_payload = {
+        "update_id": 1,
+        "message": {
+            "message_id": 1,
+            "date": 0,
+            "text": "Hi",
+            "chat": {"id": 200},
+        },
+    }
+
+    response = await client.post(
+        "/api/integrations/telegram/webhook",
+        params={"token": "bot-token"},
+        json=start_payload,
+    )
+    assert response.status_code == 200
+    session = store.get_active_for_user("200")
+    assert session is not None
+
+    follow_payload = {
+        "update_id": 2,
+        "message": {
+            "message_id": 2,
+            "date": 0,
+            "text": "Gold",
+            "chat": {"id": 200},
+        },
+    }
+
+    response = await client.post(
+        "/api/integrations/telegram/webhook",
+        params={"token": "bot-token"},
+        json=follow_payload,
+    )
+    assert response.status_code == 200
+    data = response.json()
+    lower = data["text"].lower()
+    assert "profit or loss" in lower
+    assert "which ticker" not in lower
+    assert extraction.submissions[-1].ticker == "GOLD"

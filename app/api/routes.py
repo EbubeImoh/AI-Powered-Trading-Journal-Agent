@@ -5,6 +5,7 @@ FastAPI routes for the trading journal agent.
 from __future__ import annotations
 
 import json
+import re
 import uuid
 from datetime import datetime, timedelta, timezone
 from http import HTTPStatus
@@ -14,6 +15,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 from fastapi.responses import JSONResponse, RedirectResponse
 
 from app.clients.google_auth import OAuthTokenExchangeError, OAuthTokenNotFoundError
+from app.services.trade_capture import TradeCaptureSession
 from app.dependencies import (
     get_analysis_queue_service,
     get_app_settings,
@@ -269,7 +271,7 @@ async def submit_trade(
     history_content = payload.content
     aggregated_attachments = list(payload.attachments)
 
-    structured_defaults = session.structured if session else {}
+    structured_defaults = dict(session.structured) if session else {}
     if session:
         history_lines = [*session.conversation, payload.content]
         history_content = "\n".join(filter(None, history_lines))
@@ -447,11 +449,17 @@ async def telegram_webhook(
     active_session = capture_store.get_active_for_user(user_id)
     session_id = active_session.session_id if active_session else None
 
+    inferred_fields: dict[str, Any] = {}
     submission = TradeSubmissionRequest(
         user_id=user_id,
         content=message.text,
         session_id=session_id,
     )
+
+    if active_session:
+        inferred_fields = _absorb_user_reply(active_session, text)
+        if inferred_fields:
+            submission = submission.copy(update=inferred_fields)
 
     # TODO: lookup sheet configuration per Telegram chat / user mapping.
     try:
@@ -485,10 +493,17 @@ async def telegram_webhook(
             }
         raise
 
+    acknowledgement = _format_acknowledgement(inferred_fields)
+
     reply_text = result.prompt if result.status == "needs_more_info" else result.summary
 
-    response_text = reply_text or (
+    response_text_core = reply_text or (
         "✅ Trade captured! I'll keep an eye out for your next update."
+    )
+    response_text = (
+        f"{acknowledgement}\n\n{response_text_core}".strip()
+        if acknowledgement
+        else response_text_core
     )
 
     return {
@@ -535,6 +550,115 @@ def _build_follow_up_prompt(
     return (
         f"{context} {primary_question} When you can, also let me know: {reminder}."
     )
+
+
+def _format_acknowledgement(fields: dict[str, Any]) -> str:
+    if not fields:
+        return ""
+
+    phrases: list[str] = []
+    for key, value in fields.items():
+        if key == "ticker":
+            phrases.append(f"ticker noted as {value}")
+        elif key == "pnl":
+            phrases.append(f"PnL logged as {value}")
+        elif key == "position_type":
+            phrases.append(f"position type set to {value}")
+        elif key in {"entry_timestamp", "exit_timestamp"}:
+            when = value.isoformat() if isinstance(value, datetime) else str(value)
+            phrases.append(f"{key.replace('_', ' ')} recorded as {when}")
+        elif key == "notes":
+            phrases.append("added to your notes")
+
+    if not phrases:
+        return ""
+    return "Got it — " + "; ".join(phrases)
+
+
+def _absorb_user_reply(
+    session: TradeCaptureSession, message_text: str
+) -> dict[str, Any]:
+    pending = session.missing_fields
+    text = message_text.strip()
+    if not pending or not text:
+        return {}
+
+    updates: dict[str, Any] = {}
+    lower = text.lower()
+
+    if "position_type" in pending:
+        for keyword in ("long", "short", "call", "put"):
+            if keyword in lower:
+                updates.setdefault("position_type", keyword)
+                break
+
+    if "pnl" in pending:
+        pnl_match = re.search(r"([-+]?[\d,]+(?:\.\d+)?)", text)
+        if pnl_match:
+            try:
+                updates["pnl"] = float(pnl_match.group(1).replace(",", ""))
+            except ValueError:
+                pass
+
+    if "entry_timestamp" in pending or "exit_timestamp" in pending:
+        dt_match = re.search(
+            r"\b\d{4}-\d{2}-\d{2}(?:[ T]\d{2}:\d{2}(?::\d{2})?)?(?:Z|[+-]\d{2}:\d{2})?\b",
+            text,
+        )
+        if dt_match:
+            candidate = dt_match.group(0).replace(" ", "T")
+            if candidate.endswith("Z"):
+                candidate = candidate[:-1] + "+00:00"
+            try:
+                parsed_dt = datetime.fromisoformat(candidate)
+            except ValueError:
+                parsed_dt = None
+            if parsed_dt:
+                for field in ("entry_timestamp", "exit_timestamp"):
+                    if field in pending and field not in updates:
+                        updates[field] = parsed_dt
+
+    if "ticker" in pending:
+        ticker = _extract_ticker_candidate(text)
+        if ticker:
+            updates.setdefault("ticker", ticker)
+
+    if "notes" in pending and text:
+        updates.setdefault("notes", text)
+
+    return updates
+
+
+def _extract_ticker_candidate(message_text: str) -> str | None:
+    tokens = re.findall(r"[A-Za-z]{2,10}", message_text)
+    stop_words = {
+        "THE",
+        "WITH",
+        "LONG",
+        "SHORT",
+        "ENTRY",
+        "EXIT",
+        "LOSS",
+        "GAIN",
+        "PROFIT",
+        "AM",
+        "TRADING",
+        "TRADED",
+        "TRADE",
+        "PAIR",
+        "MADE",
+        "LOST",
+        "BOUGHT",
+        "SOLD",
+        "IT",
+        "WAS",
+        "POSITION",
+    }
+    for token in reversed(tokens):
+        candidate = token.upper()
+        if candidate not in stop_words:
+            return candidate
+    return None
 
 
 def _render_trade_summary(trade: TradeIngestionRequest) -> str:
