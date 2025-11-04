@@ -517,11 +517,24 @@ def _build_follow_up_prompt(
     else:
         context = "Thanks for the details so far."
 
-    questions = [
-        _FIELD_PROMPTS.get(field, f"Please share {field.replace('_', ' ')}.")
-        for field in missing_fields
+    if not missing_fields:
+        return context
+
+    next_field = missing_fields[0]
+    primary_question = _FIELD_PROMPTS.get(
+        next_field, f"Please share {next_field.replace('_', ' ')}."
+    )
+
+    if len(missing_fields) == 1:
+        return f"{context} {primary_question}"
+
+    remaining = [
+        field.replace("_", " ") for field in missing_fields[1:]
     ]
-    return f"{context} {' '.join(questions)}"
+    reminder = ", ".join(remaining)
+    return (
+        f"{context} {primary_question} When you can, also let me know: {reminder}."
+    )
 
 
 def _render_trade_summary(trade: TradeIngestionRequest) -> str:
