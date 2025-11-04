@@ -9,6 +9,8 @@ from urllib.parse import parse_qs, urlparse
 
 import httpx
 import pytest
+from fastapi import HTTPException
+from http import HTTPStatus
 
 from app.main import app
 from app.schemas import TradeIngestionRequest, TradeIngestionResponse
@@ -248,3 +250,48 @@ async def test_telegram_connect_authorize_roundtrip(overrides, client):
     data = auth_response.json()
     assert data["authorization_url"].startswith("https://oauth.example.com/auth")
     assert dummy_client.states and dummy_client.states[-1] == data["state"]
+
+
+async def test_telegram_prompts_connect_when_not_authorized(overrides, client):
+    extraction, _, store, _ = overrides
+
+    class UnauthorizedTokenService:
+        async def get_credentials(self, *, user_id: str):
+            raise HTTPException(
+                status_code=HTTPStatus.UNAUTHORIZED,
+                detail="Google account not connected.",
+            )
+
+    from app import dependencies
+
+    override_key = dependencies.get_google_token_service
+    previous = app.dependency_overrides.get(override_key)
+    app.dependency_overrides[override_key] = lambda: UnauthorizedTokenService()
+    try:
+        payload = {
+            "update_id": 999,
+            "message": {
+                "message_id": 4,
+                "date": 0,
+                "text": "Log my trade",
+                "chat": {"id": 555},
+            },
+        }
+
+        response = await client.post(
+            "/api/integrations/telegram/webhook",
+            params={"token": "bot-token"},
+            json=payload,
+        )
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["method"] == "sendMessage"
+        assert data["chat_id"] == 555
+        assert "send /connect" in data["text"].lower()
+        assert store.get_active_for_user("555") is None
+    finally:
+        if previous is not None:
+            app.dependency_overrides[override_key] = previous
+        else:
+            app.dependency_overrides.pop(override_key, None)

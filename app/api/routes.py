@@ -406,15 +406,27 @@ async def telegram_webhook(
     )
 
     # TODO: lookup sheet configuration per Telegram chat / user mapping.
-    result = await submit_trade(
-        payload=submission,
-        response=Response(),
-        extraction_service=extraction_service,
-        ingestion_service=ingestion_service,
-        token_service=token_service,
-        capture_store=capture_store,
-        sheet_id=sheet_id,
-    )
+    try:
+        result = await submit_trade(
+            payload=submission,
+            response=Response(),
+            extraction_service=extraction_service,
+            ingestion_service=ingestion_service,
+            token_service=token_service,
+            capture_store=capture_store,
+            sheet_id=sheet_id,
+        )
+    except HTTPException as exc:
+        if exc.status_code == HTTPStatus.UNAUTHORIZED:
+            return {
+                "method": "sendMessage",
+                "chat_id": chat_id,
+                "text": (
+                    "I can't access your Google account yet. "
+                    "Send /connect to authorize me, then try again."
+                ),
+            }
+        raise
 
     reply_text = result.prompt if result.status == "needs_more_info" else result.summary
 
