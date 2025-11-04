@@ -13,7 +13,7 @@ from fastapi import HTTPException
 from http import HTTPStatus
 
 from app.main import app
-from app.schemas import TradeIngestionRequest, TradeIngestionResponse, TradeSubmissionRequest
+from app.schemas import TradeAttachment, TradeIngestionRequest, TradeIngestionResponse, TradeSubmissionRequest
 from app.services.trade_capture import TradeCaptureStore
 from app.services.trade_extraction import ExtractionResult
 
@@ -101,6 +101,9 @@ def overrides(tmp_path):
     base_settings.telegram_default_sheet_id = "sheet-telegram"
 
     app.dependency_overrides.clear()
+    # ensure cached dependencies don't leak between tests
+    if hasattr(dependencies.get_telegram_conversation_assistant, "cache_clear"):
+        dependencies.get_telegram_conversation_assistant.cache_clear()
     app.dependency_overrides.update(
         {
             dependencies.get_google_token_service: lambda: StubTokenService(),
@@ -436,3 +439,73 @@ async def test_telegram_handles_ticker_negation(overrides, client):
     data = response.json()
     assert data["text"].startswith("assistant: missing")
     assert extraction.submissions[-1].ticker is None
+
+
+async def test_telegram_handles_photo_attachment(monkeypatch, overrides, client):
+    from app.api import routes as telegram_routes
+
+    extraction, _, store, _, assistant = overrides
+
+    extraction.results.extend(
+        [
+            ExtractionResult(
+                trade=None,
+                structured={},
+                missing_fields=["ticker", "pnl"],
+            ),
+            ExtractionResult(
+                trade=None,
+                structured={"ticker": "GOLD"},
+                missing_fields=["pnl"],
+            ),
+        ]
+    )
+
+    async def fake_collect(message_dict, bot_token):
+        return (
+            [
+                TradeAttachment(
+                    filename="chart.png",
+                    mime_type="image/png",
+                    file_b64="ZGF0YQ==",
+                    tags=["photo"],
+                )
+            ],
+            ["Photo attached: chart.png"],
+        )
+
+    monkeypatch.setattr(
+        telegram_routes, "_collect_telegram_attachments", fake_collect
+    )
+
+    payload = {
+        "update_id": 10,
+        "message": {
+            "message_id": 5,
+            "date": 0,
+            "text": "",
+            "caption": "Here is the setup",
+            "chat": {"id": 301},
+            "photo": [
+                {
+                    "file_id": "photo-id",
+                    "file_unique_id": "unique-photo",
+                    "file_size": 12345,
+                    "width": 800,
+                    "height": 600,
+                }
+            ],
+        },
+    }
+
+    response = await client.post(
+        "/api/integrations/telegram/webhook",
+        params={"token": "bot-token"},
+        json=payload,
+    )
+
+    assert response.status_code == 200
+    assert assistant.calls, "assistant should be invoked for media messages"
+    assert extraction.submissions, "extraction service should receive submission"
+    assert extraction.submissions[-1].attachments
+    assert assistant.calls[-1][0].startswith("Here is the setup")

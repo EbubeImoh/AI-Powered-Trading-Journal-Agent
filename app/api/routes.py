@@ -4,13 +4,16 @@ FastAPI routes for the trading journal agent.
 
 from __future__ import annotations
 
+import base64
 import json
+import logging
 import re
 import uuid
 from datetime import datetime, timedelta, timezone
 from http import HTTPStatus
 from typing import Annotated, Any
 
+import httpx
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 from fastapi.responses import JSONResponse, RedirectResponse
 
@@ -37,6 +40,7 @@ from app.schemas import (
     AnalysisRequest,
     OAuthCallbackPayload,
     TelegramUpdate,
+    TradeAttachment,
     TradeIngestionRequest,
     TradeIngestionResponse,
     TradeSubmissionRequest,
@@ -44,6 +48,7 @@ from app.schemas import (
 )
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
 
 
 _FIELD_PROMPTS = {
@@ -431,12 +436,20 @@ async def telegram_webhook(
     """Handle incoming Telegram messages and drive trade capture."""
 
     message = update.message
-    if not message or not message.text:
+    if not message:
         return {"status": "ignored"}
 
+    message_dict = message.dict(exclude_none=True)
     chat_id = message.chat.get("id")
     user_id = str(chat_id)
-    text = message.text.strip()
+    text = (message.text or getattr(message, "caption", "") or "").strip()
+    has_media = any(
+        key in message_dict for key in ("photo", "document", "voice", "audio", "video")
+    )
+    if not text and not has_media:
+        return {"status": "ignored"}
+    if not text:
+        text = "(attachment)"
 
     expected_token = getattr(settings, "telegram_bot_token", None)
     if expected_token and token != expected_token:
@@ -469,16 +482,24 @@ async def telegram_webhook(
     active_session = capture_store.get_active_for_user(user_id)
     session_id = active_session.session_id if active_session else None
 
-    inferred_fields: dict[str, Any] = {}
-    inferred_fields: dict[str, Any] = {}
+    attachments, attachment_notes = await _collect_telegram_attachments(
+        message_dict, expected_token
+    )
+    assistant_message = text
+    if attachment_notes:
+        notes_block = "\n".join(attachment_notes)
+        assistant_message = f"{text}\n\nAttachments:\n{notes_block}"
+
     submission = TradeSubmissionRequest(
         user_id=user_id,
-        content=message.text,
+        content=assistant_message,
         session_id=session_id,
+        attachments=attachments,
     )
 
+    inferred_fields: dict[str, Any] = {}
     if active_session:
-        inferred_fields = _absorb_user_reply(active_session, text)
+        inferred_fields = _absorb_user_reply(active_session, assistant_message)
         if inferred_fields:
             submission = submission.copy(update=inferred_fields)
 
@@ -520,7 +541,7 @@ async def telegram_webhook(
 
     try:
         response_text = await assistant.compose_reply(
-            user_message=text,
+            user_message=submission.content,
             session=session_for_reply,
             result=result,
             inferred_fields=inferred_fields,
@@ -585,6 +606,158 @@ def _build_follow_up_prompt(
     return (
         f"{context} {primary_question} When you can, also let me know: {reminder}."
     )
+
+
+TELEGRAM_API_BASE = "https://api.telegram.org"
+
+
+async def _collect_telegram_attachments(
+    message: dict[str, Any], bot_token: str | None
+) -> tuple[list[TradeAttachment], list[str]]:
+    if not bot_token:
+        return [], []
+
+    has_media = any(
+        key in message for key in ("photo", "document", "audio", "voice", "video")
+    )
+    if not has_media:
+        return [], []
+
+    attachments: list[TradeAttachment] = []
+    notes: list[str] = []
+
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            if "photo" in message:
+                photo = message["photo"][-1]
+                await _append_file_attachment(
+                    client,
+                    bot_token,
+                    file_id=photo["file_id"],
+                    filename=f"photo_{photo.get('file_unique_id', photo['file_id'])}.jpg",
+                    mime_type="image/jpeg",
+                    note_prefix="Photo attached",
+                    tags=["photo"],
+                    attachments=attachments,
+                    notes=notes,
+                )
+
+            document = message.get("document")
+            if document:
+                await _append_file_attachment(
+                    client,
+                    bot_token,
+                    file_id=document["file_id"],
+                    filename=document.get("file_name")
+                    or f"document_{document.get('file_unique_id', document['file_id'])}",
+                    mime_type=document.get("mime_type", "application/octet-stream"),
+                    note_prefix="Document attached",
+                    tags=["document"],
+                    attachments=attachments,
+                    notes=notes,
+                )
+
+            audio = message.get("audio")
+            if audio:
+                await _append_file_attachment(
+                    client,
+                    bot_token,
+                    file_id=audio["file_id"],
+                    filename=audio.get("file_name")
+                    or f"audio_{audio.get('file_unique_id', audio['file_id'])}.mp3",
+                    mime_type=audio.get("mime_type", "audio/mpeg"),
+                    note_prefix="Audio attached",
+                    tags=["audio"],
+                    attachments=attachments,
+                    notes=notes,
+                )
+
+            voice = message.get("voice")
+            if voice:
+                await _append_file_attachment(
+                    client,
+                    bot_token,
+                    file_id=voice["file_id"],
+                    filename=f"voice_{voice.get('file_unique_id', voice['file_id'])}.ogg",
+                    mime_type=voice.get("mime_type", "audio/ogg"),
+                    note_prefix="Voice note attached",
+                    tags=["voice"],
+                    attachments=attachments,
+                    notes=notes,
+                )
+
+            video = message.get("video")
+            if video:
+                await _append_file_attachment(
+                    client,
+                    bot_token,
+                    file_id=video["file_id"],
+                    filename=video.get("file_name")
+                    or f"video_{video.get('file_unique_id', video['file_id'])}.mp4",
+                    mime_type=video.get("mime_type", "video/mp4"),
+                    note_prefix="Video attached",
+                    tags=["video"],
+                    attachments=attachments,
+                    notes=notes,
+                )
+    except Exception as exc:  # pragma: no cover - defensive
+        logger.warning("Failed to process Telegram attachments: %s", exc)
+
+    return attachments, notes
+
+
+async def _append_file_attachment(
+    client: httpx.AsyncClient,
+    bot_token: str,
+    file_id: str,
+    filename: str,
+    mime_type: str,
+    note_prefix: str,
+    tags: list[str],
+    attachments: list[TradeAttachment],
+    notes: list[str],
+) -> None:
+    try:
+        file_path = await _telegram_get_file_path(client, bot_token, file_id)
+        content = await _telegram_download_file(client, bot_token, file_path)
+    except Exception as exc:  # pragma: no cover - defensive
+        logger.warning("Failed to download Telegram file %s: %s", file_id, exc)
+        return
+
+    file_b64 = base64.b64encode(content).decode("utf-8")
+    attachments.append(
+        TradeAttachment(
+            filename=filename,
+            mime_type=mime_type,
+            file_b64=file_b64,
+            tags=tags,
+        )
+    )
+    notes.append(f"{note_prefix}: {filename}")
+
+
+async def _telegram_get_file_path(
+    client: httpx.AsyncClient, bot_token: str, file_id: str
+) -> str:
+    resp = await client.get(
+        f"{TELEGRAM_API_BASE}/bot{bot_token}/getFile",
+        params={"file_id": file_id},
+    )
+    resp.raise_for_status()
+    payload = resp.json()
+    if not payload.get("ok") or "result" not in payload:
+        raise RuntimeError("Telegram getFile response was not OK")
+    return payload["result"]["file_path"]
+
+
+async def _telegram_download_file(
+    client: httpx.AsyncClient, bot_token: str, file_path: str
+) -> bytes:
+    resp = await client.get(
+        f"{TELEGRAM_API_BASE}/file/bot{bot_token}/{file_path}"
+    )
+    resp.raise_for_status()
+    return resp.content
 
 
 def _format_acknowledgement(fields: dict[str, Any]) -> str:

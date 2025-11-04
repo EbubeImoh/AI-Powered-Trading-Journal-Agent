@@ -3,7 +3,7 @@ Pydantic models for trade ingestion and analysis requests.
 """
 
 from datetime import datetime
-from typing import Any, Dict, Literal, Optional
+from typing import Any, Dict, List, Literal, Optional
 
 from pydantic import BaseModel, Field, HttpUrl
 
@@ -145,8 +145,17 @@ class TelegramMessage(BaseModel):
     message_id: int
     date: int
     text: Optional[str] = None
+    caption: Optional[str] = None
+    photo: Optional[List[Dict[str, Any]]] = None
+    document: Optional[Dict[str, Any]] = None
+    audio: Optional[Dict[str, Any]] = None
+    voice: Optional[Dict[str, Any]] = None
+    video: Optional[Dict[str, Any]] = None
     chat: Dict[str, Any]
     from_: Optional[Dict[str, Any]] = Field(None, alias="from")
+
+    class Config:
+        extra = "ignore"
 
 
 TelegramUpdate.update_forward_refs()
