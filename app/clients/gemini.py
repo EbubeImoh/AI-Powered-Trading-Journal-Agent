@@ -4,13 +4,27 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 from textwrap import dedent
-from typing import Any, Iterable
+from typing import Any, Callable, Iterable
 
 import google.generativeai as genai
 from google.api_core.exceptions import GoogleAPICallError, NotFound
 
 from app.core.config import GeminiSettings
+
+
+_TEXT_FALLBACKS: tuple[str, ...] = (
+    "gemini-1.5-pro",
+    "gemini-1.5-flash",
+    "gemini-pro",
+)
+_VISION_FALLBACKS: tuple[str, ...] = (
+    "gemini-1.5-flash",
+    "gemini-pro-vision",
+)
+
+logger = logging.getLogger(__name__)
 
 
 class GeminiModelError(RuntimeError):
@@ -29,19 +43,12 @@ class GeminiClient:
         """Produce a free-form text response using the configured model."""
 
         def _invoke() -> str:
-            model = genai.GenerativeModel(self._settings.model_name)
-            try:
-                response = model.generate_content(prompt, safety_settings=[])
-            except NotFound as exc:  # pragma: no cover - network call
-                raise GeminiModelError(
-                    "Gemini model '"
-                    f"{self._settings.model_name}"
-                    "' is not available. Update GEMINI_MODEL_NAME to a supported value."
-                ) from exc
-            except GoogleAPICallError as exc:  # pragma: no cover - network call
-                raise GeminiModelError(
-                    f"Gemini text generate_content failed: {exc.message}"
-                ) from exc
+            response = self._invoke_with_models(
+                models=self._text_model_candidates(),
+                env_var="GEMINI_MODEL_NAME",
+                error_prefix="Gemini text generate_content failed",
+                call=lambda model: model.generate_content(prompt, safety_settings=[]),
+            )
             return response.text or ""
 
         return await asyncio.to_thread(_invoke)
@@ -59,7 +66,6 @@ class GeminiClient:
         """Call Gemini text model to synthesize a holistic trade analysis."""
 
         def _invoke() -> str:
-            model = genai.GenerativeModel(self._settings.model_name)
             content = _build_analysis_prompt(
                 system_prompt=system_prompt,
                 job_prompt=job_prompt,
@@ -68,18 +74,12 @@ class GeminiClient:
                 image_insights=image_insights or [],
                 web_research=web_research or [],
             )
-            try:
-                response = model.generate_content(content, safety_settings=[])
-            except NotFound as exc:  # pragma: no cover - network call
-                raise GeminiModelError(
-                    "Gemini model '"
-                    f"{self._settings.model_name}"
-                    "' is not available. Update GEMINI_MODEL_NAME to a supported value."
-                ) from exc
-            except GoogleAPICallError as exc:  # pragma: no cover - network call
-                raise GeminiModelError(
-                    f"Gemini generate_content failed: {exc.message}"
-                ) from exc
+            response = self._invoke_with_models(
+                models=self._text_model_candidates(),
+                env_var="GEMINI_MODEL_NAME",
+                error_prefix="Gemini generate_content failed",
+                call=lambda model: model.generate_content(content, safety_settings=[]),
+            )
             return response.text or ""
 
         raw = await asyncio.to_thread(_invoke)
@@ -95,9 +95,11 @@ class GeminiClient:
         """Generate insights about an image by invoking the Gemini vision model."""
 
         def _invoke() -> str:
-            model = genai.GenerativeModel(self._settings.vision_model_name)
-            try:
-                response = model.generate_content(
+            response = self._invoke_with_models(
+                models=self._vision_model_candidates(),
+                env_var="GEMINI_VISION_MODEL_NAME",
+                error_prefix="Gemini vision generate_content failed",
+                call=lambda model: model.generate_content(
                     [
                         prompt,
                         {
@@ -106,17 +108,8 @@ class GeminiClient:
                         },
                     ],
                     safety_settings=[],
-                )
-            except NotFound as exc:  # pragma: no cover - network call
-                raise GeminiModelError(
-                    "Gemini vision model '"
-                    f"{self._settings.vision_model_name}"
-                    "' is not available. Update GEMINI_VISION_MODEL_NAME to a supported value."
-                ) from exc
-            except GoogleAPICallError as exc:  # pragma: no cover - network call
-                raise GeminiModelError(
-                    f"Gemini vision generate_content failed: {exc.message}"
-                ) from exc
+                ),
+            )
             return response.text or ""
 
         raw = await asyncio.to_thread(_invoke)
@@ -132,9 +125,11 @@ class GeminiClient:
         """Invoke Gemini to transcribe an audio clip."""
 
         def _invoke() -> str:
-            model = genai.GenerativeModel(self._settings.model_name)
-            try:
-                response = model.generate_content(
+            response = self._invoke_with_models(
+                models=self._text_model_candidates(),
+                env_var="GEMINI_MODEL_NAME",
+                error_prefix="Gemini audio generate_content failed",
+                call=lambda model: model.generate_content(
                     [
                         {
                             "role": "user",
@@ -145,17 +140,8 @@ class GeminiClient:
                         }
                     ],
                     safety_settings=[],
-                )
-            except NotFound as exc:  # pragma: no cover - network call
-                raise GeminiModelError(
-                    "Gemini model '"
-                    f"{self._settings.model_name}"
-                    "' is not available. Update GEMINI_MODEL_NAME to a supported value."
-                ) from exc
-            except GoogleAPICallError as exc:  # pragma: no cover - network call
-                raise GeminiModelError(
-                    f"Gemini audio generate_content failed: {exc.message}"
-                ) from exc
+                ),
+            )
             return response.text or ""
 
         raw = await asyncio.to_thread(_invoke)
@@ -174,7 +160,6 @@ class GeminiClient:
         overrides_section = json.dumps(overrides or {})
 
         def _invoke() -> str:
-            model = genai.GenerativeModel(self._settings.model_name)
             prompt = dedent(
                 (
                     "You are a trading journal assistant. Analyse the user's "
@@ -190,8 +175,11 @@ class GeminiClient:
                     f"{content}"
                 )
             )
-            try:
-                response = model.generate_content(
+            response = self._invoke_with_models(
+                models=self._text_model_candidates(),
+                env_var="GEMINI_MODEL_NAME",
+                error_prefix="Gemini generate_content failed",
+                call=lambda model: model.generate_content(
                     [
                         {
                             "role": "user",
@@ -199,21 +187,81 @@ class GeminiClient:
                         }
                     ],
                     safety_settings=[],
-                )
-            except NotFound as exc:  # pragma: no cover - network call
-                raise GeminiModelError(
-                    "Gemini model '"
-                    f"{self._settings.model_name}"
-                    "' is not available. Update GEMINI_MODEL_NAME to a supported value."
-                ) from exc
-            except GoogleAPICallError as exc:  # pragma: no cover - network call
-                raise GeminiModelError(
-                    f"Gemini text generate_content failed: {exc.message}"
-                ) from exc
+                ),
+            )
             return response.text or ""
 
         raw = await asyncio.to_thread(_invoke)
         return _parse_json_response(raw)
+
+    def _invoke_with_models(
+        self,
+        *,
+        models: Iterable[str],
+        env_var: str,
+        error_prefix: str,
+        call: Callable[[genai.GenerativeModel], Any],
+    ) -> Any:
+        """Try the configured model followed by fallbacks when available."""
+
+        model_sequence = list(models)
+        last_not_found: NotFound | None = None
+        for index, model_name in enumerate(model_sequence):
+            generative_model = genai.GenerativeModel(model_name)
+            try:
+                return call(generative_model)
+            except NotFound as exc:  # pragma: no cover - network call
+                last_not_found = exc
+                logger.warning(
+                    "Gemini model '%s' not found (attempt %d/%d); trying fallback.",
+                    model_name,
+                    index + 1,
+                    len(model_sequence),
+                )
+                continue
+            except GoogleAPICallError as exc:  # pragma: no cover - network call
+                raise GeminiModelError(f"{error_prefix}: {exc.message}") from exc
+
+        if last_not_found is not None:
+            primary = model_sequence[0] if model_sequence else "unknown"
+            raise GeminiModelError(
+                "Gemini model '"
+                f"{primary}"
+                "' is not available. Update "
+                f"{env_var} to a supported value."
+            ) from last_not_found
+
+        raise GeminiModelError(f"{error_prefix}: Unknown error invoking Gemini.")
+
+    def _text_model_candidates(self) -> list[str]:
+        return self._collect_candidates(
+            self._settings.model_name,
+            _TEXT_FALLBACKS,
+        )
+
+    def _vision_model_candidates(self) -> list[str]:
+        return self._collect_candidates(
+            self._settings.vision_model_name,
+            _VISION_FALLBACKS,
+        )
+
+    @staticmethod
+    def _collect_candidates(
+        configured: str | None,
+        fallbacks: tuple[str, ...],
+    ) -> list[str]:
+        """Return distinct model names prioritizing the configured value."""
+        seen: set[str] = set()
+        candidates: list[str] = []
+        for name in (configured, *fallbacks):
+            if not name:
+                continue
+            cleaned = name.strip()
+            if not cleaned or cleaned in seen:
+                continue
+            seen.add(cleaned)
+            candidates.append(cleaned)
+        return candidates
 
 
 def _truncate(value: Any, max_len: int = 4000) -> Any:
