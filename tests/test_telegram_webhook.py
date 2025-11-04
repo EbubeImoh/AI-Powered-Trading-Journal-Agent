@@ -127,13 +127,13 @@ async def test_telegram_webhook_needs_more_info(overrides, client):
         json=payload,
     )
 
-    assert response.status_code == 202
+    assert response.status_code == 200
     data = response.json()
-    assert data["status"] == "needs_more_info"
-    assert data["reply"]
-    session_id = data["session_id"]
-    assert session_id
-    assert store.get(session_id)
+    assert data["method"] == "sendMessage"
+    assert data["chat_id"] == 42
+    assert "profit or loss" in data["text"].lower()
+    active_session = store.get_active_for_user("42")
+    assert active_session is not None
 
 
 async def test_telegram_webhook_completed(overrides, client):
@@ -163,10 +163,11 @@ async def test_telegram_webhook_completed(overrides, client):
         json=payload,
     )
 
-    assert response.status_code == 202
+    assert response.status_code == 200
     data = response.json()
-    assert data["status"] == "completed"
-    assert "trade" not in data
+    assert data["method"] == "sendMessage"
+    assert data["chat_id"] == 77
+    assert "nvda" in data["text"].lower()
     assert ingestion.requests
 
 
@@ -189,12 +190,12 @@ async def test_telegram_webhook_connect(overrides, client):
         json=payload,
     )
 
-    assert response.status_code == 202
+    assert response.status_code == 200
     data = response.json()
-    assert data["status"] == "connect"
-    assert "connect your google account" in data["reply"].lower()
-    assert "user_id=99" in data["reply"]
+    assert data["method"] == "sendMessage"
     assert data["chat_id"] == 99
+    assert "connect your google account" in data["text"].lower()
+    assert "user_id=99" in data["text"]
 
 
 async def test_telegram_connect_authorize_roundtrip(overrides, client):
@@ -230,9 +231,10 @@ async def test_telegram_connect_authorize_roundtrip(overrides, client):
         json=payload,
     )
 
-    assert response.status_code == 202
+    assert response.status_code == 200
     connect_reply = response.json()
-    link_line = connect_reply["reply"].splitlines()[-1].strip()
+    assert connect_reply["method"] == "sendMessage"
+    link_line = connect_reply["text"].splitlines()[-1].strip()
 
     parsed = urlparse(link_line)
     assert parsed.scheme == "https"
